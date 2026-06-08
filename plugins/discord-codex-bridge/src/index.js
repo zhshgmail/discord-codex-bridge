@@ -4,12 +4,18 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const readline = require('node:readline');
+const {
+  loadState,
+  saveState,
+} = require('./access-state');
 
 const DEFAULT_CONFIG_DIR = path.join(os.homedir(), '.codex', 'channels', 'discord');
 const DEFAULT_ENV_FILE = path.join(DEFAULT_CONFIG_DIR, '.env');
+const DEFAULT_BRIDGE_ENV_FILE = path.join(os.homedir(), '.config', 'discord-codex-bridge.env');
 const DEFAULT_CWD = process.cwd();
 
 function log(level, message, meta) {
@@ -20,15 +26,6 @@ function log(level, message, meta) {
 function parseBool(value, fallback = false) {
   if (value === undefined || value === null || value === '') return fallback;
   return /^(1|true|yes|on)$/i.test(String(value).trim());
-}
-
-function parseCsvSet(value) {
-  return new Set(
-    String(value || '')
-      .split(',')
-      .map(item => item.trim())
-      .filter(Boolean),
-  );
 }
 
 function stripQuotes(value) {
@@ -58,9 +55,9 @@ function loadEnvFile(file) {
   }
 }
 
+loadEnvFile(process.env.DISCORD_BRIDGE_ENV_FILE || DEFAULT_BRIDGE_ENV_FILE);
 const configDir = process.env.DISCORD_CONFIG_DIR || process.env.DISCORD_STATE_DIR || DEFAULT_CONFIG_DIR;
 loadEnvFile(process.env.DISCORD_ENV_FILE || path.join(configDir, '.env'));
-loadEnvFile(process.env.DISCORD_BRIDGE_ENV_FILE);
 
 if (parseBool(process.env.DISCORD_INSECURE_TLS, false)) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
@@ -113,18 +110,17 @@ const config = {
   codexTtyUseSudo: parseBool(process.env.CODEX_TTY_USE_SUDO, true),
   codexTtyBracketedPaste: parseBool(process.env.CODEX_TTY_BRACKETED_PASTE, true),
   codexTtySubmit: parseBool(process.env.CODEX_TTY_SUBMIT, true),
-  codexTtyPromptFormat: (process.env.CODEX_TTY_PROMPT_FORMAT || 'compact').toLowerCase(),
+  codexTtyPromptFormat: (process.env.CODEX_TTY_PROMPT_FORMAT || 'minimal').toLowerCase(),
   codexTtyInjectTimeoutMs: Number(process.env.CODEX_TTY_INJECT_TIMEOUT_MS || 15000),
   discordSendHelper: process.env.DISCORD_SEND_HELPER || path.join(__dirname, '..', 'scripts', 'send-message.js'),
   requireMentionInGuilds: parseBool(process.env.DISCORD_REQUIRE_MENTION_IN_GUILDS, true),
-  bootstrapFirstUser: parseBool(process.env.DISCORD_BOOTSTRAP_FIRST_USER, true),
-  bootstrapGuildMentions: parseBool(process.env.DISCORD_BOOTSTRAP_GUILD_MENTIONS, true),
-  allowEveryone: parseBool(process.env.DISCORD_ALLOW_EVERYONE, true),
+  requireAllowFromInGuilds: parseBool(process.env.DISCORD_REQUIRE_ALLOW_FROM_IN_GUILDS, true),
+  bootstrapFirstUser: parseBool(process.env.DISCORD_BOOTSTRAP_FIRST_USER, false),
+  bootstrapGuildMentions: parseBool(process.env.DISCORD_BOOTSTRAP_GUILD_MENTIONS, false),
+  allowEveryone: parseBool(process.env.DISCORD_ALLOW_EVERYONE, false),
   maxDiscordChunk: Number(process.env.DISCORD_MAX_CHARS || 1900),
   typingIntervalMs: Number(process.env.DISCORD_TYPING_INTERVAL_MS || 8000),
   codexTurnTimeoutMs: Number(process.env.CODEX_TURN_TIMEOUT_MS || 5 * 60 * 1000),
-  allowedUserIds: parseCsvSet(process.env.DISCORD_ALLOWED_USER_IDS),
-  allowedChannelIds: parseCsvSet(process.env.DISCORD_ALLOWED_CHANNEL_IDS),
 };
 
 if (!config.token) {
@@ -137,46 +133,31 @@ if (!['turn', 'inject', 'wake', 'tty'].includes(config.codexTargetMode)) {
   process.exit(1);
 }
 
-if (!['full', 'compact', 'plain'].includes(config.codexTtyPromptFormat)) {
-  log('ERROR', 'CODEX_TTY_PROMPT_FORMAT must be full, compact, or plain', { codexTtyPromptFormat: config.codexTtyPromptFormat });
+if (!['full', 'compact', 'minimal', 'plain'].includes(config.codexTtyPromptFormat)) {
+  log('ERROR', 'CODEX_TTY_PROMPT_FORMAT must be full, compact, minimal, or plain', { codexTtyPromptFormat: config.codexTtyPromptFormat });
   process.exit(1);
 }
 
 fs.mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
 const statePath = path.join(config.stateDir, 'state.json');
 
-function loadState() {
-  try {
-    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
-    return {
-      allowedUserIds: Array.isArray(state.allowedUserIds) ? state.allowedUserIds : [],
-      allowedChannelIds: Array.isArray(state.allowedChannelIds) ? state.allowedChannelIds : [],
-      threads: state.threads && typeof state.threads === 'object' ? state.threads : {},
-    };
-  } catch {
-    return { allowedUserIds: [], allowedChannelIds: [], threads: {} };
-  }
-}
-
-function saveState(state) {
-  const tmp = `${statePath}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
-  fs.renameSync(tmp, statePath);
-}
-
-const state = loadState();
-for (const id of config.allowedUserIds) {
-  if (!state.allowedUserIds.includes(id)) state.allowedUserIds.push(id);
-}
-for (const id of config.allowedChannelIds) {
-  if (!state.allowedChannelIds.includes(id)) state.allowedChannelIds.push(id);
-}
-saveState(state);
+const stateOptions = { defaultRequireMention: config.requireMentionInGuilds };
+const state = loadState(statePath, stateOptions);
+saveState(statePath, state, stateOptions);
+const recentBotMessageIds = new Set();
+const recentBotMessageQueue = [];
 
 function refreshStateFromDisk() {
-  const next = loadState();
-  state.allowedUserIds = next.allowedUserIds;
-  state.allowedChannelIds = next.allowedChannelIds;
+  const next = loadState(statePath, stateOptions);
+  state.dmPolicy = next.dmPolicy;
+  state.allowFrom = next.allowFrom;
+  state.groups = next.groups;
+  state.pendingPairings = next.pendingPairings;
+  state.mentionPatterns = next.mentionPatterns;
+  state.ackReaction = next.ackReaction;
+  state.replyToMode = next.replyToMode;
+  state.textChunkLimit = next.textChunkLimit;
+  state.chunkMode = next.chunkMode;
   state.threads = next.threads;
 }
 
@@ -576,7 +557,7 @@ class CodexConversationManager {
       lastGuildId: metadata.guildId || null,
       lastChannelId: metadata.channelId || null,
     };
-    saveState(state);
+    saveState(statePath, state, stateOptions);
     log('INFO', 'Started Codex thread for Discord chat', { chatId, threadId });
     return threadId;
   }
@@ -703,33 +684,151 @@ function bridgeInstructions() {
   ].join('\n');
 }
 
-function shouldAcceptMessage(message, client) {
+async function shouldAcceptMessage(message, client) {
   refreshStateFromDisk();
-  if (message.author.bot) return { accept: false, reason: 'bot' };
   const botId = client.user.id;
   const isDm = message.channel.type === ChannelType.DM || !message.guildId;
-  const mentioned = message.mentions.users.has(botId) || mentionsBot(message.content, botId);
-  const allowedUser = state.allowedUserIds.includes(message.author.id);
-  const allowedChannel = config.allowedChannelIds.has(message.channelId) || state.allowedChannelIds.includes(message.channelId);
+  if (message.author.id === botId) return { accept: false, reason: 'self' };
+  const mentioned = await detectsBotMention(message, client);
+  const allowedUser = state.allowFrom.includes(message.author.id);
 
-  if (!allowedUser && state.allowedUserIds.length === 0 && config.bootstrapFirstUser) {
-    if (isDm || (mentioned && config.bootstrapGuildMentions)) {
-      state.allowedUserIds.push(message.author.id);
-      saveState(state);
-      log('INFO', 'Paired first Discord user', { userId: message.author.id });
-      return { accept: true, reason: 'paired' };
+  if (state.dmPolicy === 'disabled') {
+    return { accept: false, reason: 'disabled' };
+  }
+
+  if (isDm) {
+    if (message.author.bot) return { accept: false, reason: 'bot_dm' };
+    if (allowedUser) return { accept: true, reason: 'allowed_dm' };
+    if (state.allowFrom.length === 0 && config.bootstrapFirstUser) {
+      state.allowFrom.push(message.author.id);
+      saveState(statePath, state, stateOptions);
+      log('INFO', 'Bootstrapped first Discord DM user', { userId: message.author.id });
+      return { accept: true, reason: 'bootstrap_paired' };
+    }
+    if (state.dmPolicy === 'pairing') {
+      const code = createPairingCode(message);
+      return { accept: false, reason: 'pairing_required', code };
+    }
+    return { accept: false, reason: 'unauthorized' };
+  }
+
+  const group = groupConfigForMessage(message);
+  if (message.author.bot && (!group || !group.config.allowBots)) {
+    return { accept: false, reason: 'bot' };
+  }
+  if (!group && state.allowFrom.length === 0 && config.bootstrapFirstUser && config.bootstrapGuildMentions && mentioned) {
+    state.allowFrom.push(message.author.id);
+    state.groups[message.channelId] = { requireMention: config.requireMentionInGuilds, allowFrom: [], allowBots: false };
+    saveState(statePath, state, stateOptions);
+    log('INFO', 'Bootstrapped first Discord guild mention', {
+      userId: message.author.id,
+      channelId: message.channelId,
+      guildId: message.guildId,
+    });
+    return { accept: true, reason: 'bootstrap_paired' };
+  }
+
+  if (!group) return { accept: false, reason: 'channel_not_enabled' };
+  if (!isAuthorAllowedInGroup(message.author.id, group.config)) {
+    return { accept: false, reason: 'unauthorized' };
+  }
+  if (group.config.requireMention && !mentioned) {
+    return { accept: false, reason: 'needs_mention' };
+  }
+  return { accept: true, reason: group.key === message.channelId ? 'allowed_channel' : 'allowed_thread' };
+}
+
+function createPairingCode(message) {
+  const now = Date.now();
+  const ttlMs = 15 * 60 * 1000;
+  for (const [code, pending] of Object.entries(state.pendingPairings)) {
+    const createdAt = Date.parse(pending.createdAt || '');
+    if (Number.isFinite(createdAt) && now - createdAt > ttlMs) {
+      delete state.pendingPairings[code];
+      continue;
+    }
+    if (pending.userId === message.author.id) {
+      saveState(statePath, state, stateOptions);
+      return code;
     }
   }
 
-  if (!allowedUser) return { accept: false, reason: 'unauthorized' };
-  if (!isDm && config.requireMentionInGuilds && !mentioned && !allowedChannel) {
-    return { accept: false, reason: 'needs_mention' };
+  let code = '';
+  do {
+    code = crypto.randomBytes(4).toString('base64url').replace(/[^A-Za-z0-9]/g, '').slice(0, 6).toUpperCase();
+  } while (!code || state.pendingPairings[code]);
+
+  state.pendingPairings[code] = {
+    userId: message.author.id,
+    username: message.author.username,
+    channelId: message.channelId,
+    guildId: message.guildId || null,
+    createdAt: new Date().toISOString(),
+  };
+  saveState(statePath, state, stateOptions);
+  log('INFO', 'Created Discord pairing code', { userId: message.author.id, channelId: message.channelId });
+  return code;
+}
+
+function groupConfigForMessage(message) {
+  if (!message.guildId) return null;
+  const threadParentId = message.channel?.parentId || null;
+  const keys = [message.channelId];
+  if (threadParentId) keys.push(threadParentId);
+  for (const key of keys) {
+    const group = state.groups[key];
+    if (group) return { key, config: group };
   }
-  return { accept: true, reason: 'allowed' };
+  return null;
+}
+
+function isAuthorAllowedInGroup(authorId, group) {
+  if (group.allowFrom.length) return group.allowFrom.includes(authorId);
+  if (config.requireAllowFromInGuilds) return state.allowFrom.includes(authorId);
+  return true;
+}
+
+async function detectsBotMention(message, client) {
+  const botId = client.user.id;
+  if (message.mentions.users.has(botId) || mentionsBot(message.content, botId)) return true;
+  if (matchesMentionPattern(message.content)) return true;
+  return await isReplyToBot(message, botId);
 }
 
 function mentionsBot(content, botId) {
   return content.includes(`<@${botId}>`) || content.includes(`<@!${botId}>`);
+}
+
+function matchesMentionPattern(content) {
+  for (const pattern of state.mentionPatterns) {
+    try {
+      if (new RegExp(pattern, 'i').test(content || '')) return true;
+    } catch (error) {
+      log('WARN', 'Ignoring invalid Discord mention pattern', { pattern, error: error.message });
+    }
+  }
+  return false;
+}
+
+async function isReplyToBot(message, botId) {
+  const messageId = message.reference?.messageId;
+  if (!messageId) return false;
+  if (recentBotMessageIds.has(messageId)) return true;
+  try {
+    const referenced = await message.channel.messages.fetch(messageId);
+    return referenced?.author?.id === botId;
+  } catch {
+    return false;
+  }
+}
+
+function rememberBotMessage(message) {
+  if (!message?.id) return;
+  recentBotMessageIds.add(message.id);
+  recentBotMessageQueue.push(message.id);
+  while (recentBotMessageQueue.length > 1000) {
+    recentBotMessageIds.delete(recentBotMessageQueue.shift());
+  }
 }
 
 function cleanDiscordContent(message, client) {
@@ -783,13 +882,23 @@ function buildTtyPrompt(prompt, metadata) {
     return metadata.content || prompt;
   }
 
+  const source = metadata.guildName
+    ? `Discord #${metadata.channelName || metadata.channelId}`
+    : 'Discord DM';
+
+  if (config.codexTtyPromptFormat === 'minimal') {
+    const attachments = metadata.attachmentCount ? `[${metadata.attachmentCount} attachment(s)]` : '';
+    return [
+      `[${source}; channel=${metadata.channelId}; message=${metadata.messageId}]`,
+      metadata.content || '(attachments only)',
+      attachments,
+    ].filter(Boolean).join('\n');
+  }
+
   const helper = config.discordSendHelper;
-  const replyCommand = `printf '%s' 'REPLY_TEXT_HERE' | node ${shellQuote(helper)} --channel ${metadata.channelId} --reply-to ${metadata.messageId}`;
+  const replyCommand = buildDiscordReplyCommand(helper, metadata);
 
   if (config.codexTtyPromptFormat === 'compact') {
-    const source = metadata.guildName
-      ? `Discord #${metadata.channelName || metadata.channelId} in ${metadata.guildName}`
-      : 'Discord DM';
     const attachments = metadata.attachmentCount
       ? `\nAttachments: ${metadata.attachmentCount} attachment(s); inspect the original Discord message if needed.`
       : '';
@@ -824,6 +933,23 @@ function buildTtyPrompt(prompt, metadata) {
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function buildDiscordReplyCommand(helper, metadata) {
+  const envKeys = [
+    'DISCORD_BRIDGE_ENV_FILE',
+    'DISCORD_ENV_FILE',
+    'DISCORD_CONFIG_DIR',
+    'DISCORD_STATE_DIR',
+    'DISCORD_BRIDGE_STATE_DIR',
+    'DISCORD_INSECURE_TLS',
+  ];
+  const envPrefix = envKeys
+    .filter(key => process.env[key])
+    .map(key => `${key}=${shellQuote(process.env[key])}`)
+    .join(' ');
+  const nodeCommand = `${envPrefix ? `${envPrefix} ` : ''}node ${shellQuote(helper)} --channel ${metadata.channelId} --reply-to ${metadata.messageId}`;
+  return `printf '%s' 'REPLY_TEXT_HERE' | ${nodeCommand}`;
 }
 
 function resolveCodexTty() {
@@ -979,6 +1105,7 @@ async function replyInChunks(message, text) {
     } else {
       sent = await message.channel.send(payload);
     }
+    rememberBotMessage(sent);
   }
   return sent;
 }
@@ -1028,8 +1155,11 @@ async function main() {
     log('INFO', 'Discord bridge bot is online', {
       tag: readyClient.user.tag,
       id: readyClient.user.id,
-      pairedUsers: state.allowedUserIds.length,
+      dmPolicy: state.dmPolicy,
+      allowedUsers: state.allowFrom.length,
+      enabledGuildChannels: Object.keys(state.groups).length,
       requireMentionInGuilds: config.requireMentionInGuilds,
+      requireAllowFromInGuilds: config.requireAllowFromInGuilds,
       cwd: config.codexCwd,
       sandbox: config.codexSandbox,
       approvalPolicy: config.codexApprovalPolicy,
@@ -1039,7 +1169,7 @@ async function main() {
   });
 
   client.on(Events.MessageCreate, async message => {
-    const gate = shouldAcceptMessage(message, client);
+    const gate = await shouldAcceptMessage(message, client);
     if (!gate.accept) {
       log('INFO', 'Ignored Discord message', {
         reason: gate.reason,
@@ -1052,6 +1182,12 @@ async function main() {
       if (gate.reason === 'unauthorized' && !message.guildId) {
         await message.reply({
           content: 'This Discord user is not paired with the Codex bridge.',
+          allowedMentions: { parse: [], repliedUser: false },
+        }).catch(() => {});
+      }
+      if (gate.reason === 'pairing_required' && !message.guildId) {
+        await message.reply({
+          content: `Pairing code: ${gate.code}\nRun: node scripts/manage-access.js pair ${gate.code}`,
           allowedMentions: { parse: [], repliedUser: false },
         }).catch(() => {});
       }
@@ -1077,7 +1213,7 @@ async function main() {
       return;
     }
 
-    if (gate.reason === 'paired') {
+    if (gate.reason === 'bootstrap_paired') {
       await message.react('✅').catch(() => {});
     }
 

@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "Discord Codex Bridge",
     "shortDescription": "Configure and operate Discord remote access for Codex.",
-    "longDescription": "A proxy-aware Discord bot bridge for routing Discord DMs and mentions into Codex, with skills for setup, access management, and local service operation.",
+    "longDescription": "A proxy-aware Discord bot bridge for routing paired Discord DMs and enabled guild text channels into Codex, with skills for setup, pairing, access management, and local service operation.",
     "developerName": "zhshgmail",
     "category": "Productivity",
     "capabilities": [
@@ -31,8 +31,7 @@
     "defaultPrompt": [
       "Use $discord-codex-bridge to install the Discord bridge.",
       "Use $configure to set my Discord bot token and proxy.",
-      "Use $access to allow my Discord user ID."
+      "Use $access to pair users and enable guild text channels."
     ]
   }
 }
-

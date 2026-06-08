@@ -44,9 +44,10 @@ codex plugin add discord-codex-bridge@discord-codex-bridge
 ```
 
 Create a Discord application and bot in the Discord Developer Portal. Enable
-**Message Content Intent**. Invite the bot to a shared server; for guild usage,
-grant View Channels, Send Messages, Read Message History, Send Messages in
-Threads, and Add Reactions.
+**Message Content Intent**. Invite the bot to a shared server; for guild text
+channels, grant View Channels, Send Messages, Read Message History, Send
+Messages in Threads, Attach Files, Send TTS Messages, Mention Everyone, and Add
+Reactions as needed.
 
 Install and create the local config template:
 
@@ -94,33 +95,106 @@ possible.
 
 ## Access
 
-First setup can bootstrap the first human DM or first guild @mention:
+Access follows the same model as Claude Code's Discord plugin:
 
-```env
-DISCORD_BOOTSTRAP_FIRST_USER=true
-DISCORD_BOOTSTRAP_GUILD_MENTIONS=true
+- DMs use `dmPolicy`: `pairing` (default), `allowlist`, or `disabled`.
+- `allowFrom` contains Discord user IDs allowed to DM.
+- Guild text channels are off by default and must be enabled by channel ID, not
+  guild ID.
+- Enabled guild channels default to `requireMention: true`, so only `@bot`,
+  replies to recent bot messages, or `mentionPatterns` enter Codex context.
+- Pass `--no-mention` or run `group mention CHANNEL_ID off` to receive all
+  messages in that enabled channel.
+- Channel-level `allowFrom` restricts who can trigger that channel. If it is
+  empty, global `allowFrom` is used by default.
+- Bot-authored messages are ignored unless that channel has `allowBots: true`
+  and the bot ID is allowed.
+
+Pairing flow:
+
+```bash
+node scripts/manage-access.js status
+# unknown DM gets a 6-character pairing code from the bridge
+node scripts/manage-access.js pair ABC123
+node scripts/manage-access.js policy allowlist
 ```
 
-After your intended user is allowed, lock this down:
+Manual configuration:
+
+```bash
+node scripts/manage-access.js configure --token YOUR_DISCORD_BOT_TOKEN
+node scripts/manage-access.js allow USER_ID
+node scripts/manage-access.js remove USER_ID
+node scripts/manage-access.js group add CHANNEL_ID
+node scripts/manage-access.js group add CHANNEL_ID --no-mention --allow USER_ID,OTHER_ID
+node scripts/manage-access.js group allow CHANNEL_ID USER_ID
+node scripts/manage-access.js group mention CHANNEL_ID off
+node scripts/manage-access.js group allow-bots CHANNEL_ID on
+node scripts/manage-access.js group rm CHANNEL_ID
+```
+
+The running bridge re-reads `state.json` on every inbound message, so access
+changes do not need a restart. Threads inherit their parent text channel's
+access config.
+
+The state shape is:
+
+```json
+{
+  "dmPolicy": "pairing",
+  "allowFrom": ["1004200500721360906"],
+  "groups": {
+    "1234567890123456789": {
+      "requireMention": true,
+      "allowFrom": [],
+      "allowBots": false
+    }
+  },
+  "mentionPatterns": []
+}
+```
+
+Optional bootstrap env vars exist for private one-user setup, but the default
+is pairing:
 
 ```env
 DISCORD_BOOTSTRAP_FIRST_USER=false
 DISCORD_BOOTSTRAP_GUILD_MENTIONS=false
+DISCORD_REQUIRE_ALLOW_FROM_IN_GUILDS=true
 ```
 
-Manage access:
+## Discord Channel Utilities
+
+The bundled scripts use the same token, proxy, and TLS settings:
 
 ```bash
-cd plugins/discord-codex-bridge
-node scripts/manage-access.js status
-node scripts/manage-access.js allow <discord-user-id>
-node scripts/manage-access.js remove <discord-user-id>
-node scripts/manage-access.js channel add <discord-channel-id>
-node scripts/manage-access.js channel rm <discord-channel-id>
+# 1. view channels / channel
+node scripts/list-channels.js --guild GUILD_ID
+node scripts/view-channel.js --channel CHANNEL_ID
+
+# 2. retrieve history
+node scripts/fetch-messages.js --channel CHANNEL_ID --limit 50
+
+# 3. read message
+node scripts/read-message.js --channel CHANNEL_ID --message MESSAGE_ID
+
+# 4. send message
+printf '%s' 'reply text' | node scripts/send-message.js --channel CHANNEL_ID
+
+# 5. send message in thread
+printf '%s' 'reply text' | node scripts/send-message.js --thread THREAD_ID
+
+# 6. send message with attachment
+printf '%s' 'see attached' | node scripts/send-message.js --channel CHANNEL_ID --file /abs/path/file.txt
+
+# 7. send TTS message
+printf '%s' 'tts text' | node scripts/send-message.js --channel CHANNEL_ID --tts
+
+# 8. send @everyone
+printf '%s' '@everyone update' | node scripts/send-message.js --channel CHANNEL_ID --allow-everyone
 ```
 
-The running bridge re-reads `state.json` on every inbound message, so access
-changes do not need a restart.
+History output is oldest-first and capped at 100 messages per call.
 
 ## TTY Mode
 
@@ -144,12 +218,12 @@ CODEX_TTY_USE_SUDO=true
 Prompt formatting:
 
 ```env
-CODEX_TTY_PROMPT_FORMAT=compact  # compact | full | plain
+CODEX_TTY_PROMPT_FORMAT=minimal  # minimal | compact | full | plain
 ```
 
-`compact` sends a short Discord source line, message content, and a local
-reply helper command. `full` preserves the XML-style metadata envelope. `plain`
-injects only message text.
+`minimal` injects only a one-line source marker with channel/message IDs plus
+the Discord text. `compact` includes the local reply helper command. `full`
+preserves the XML-style metadata envelope. `plain` injects only message text.
 
 ## App-Server Modes
 
@@ -173,8 +247,11 @@ cd plugins/discord-codex-bridge
 printf '%s' 'reply text' | node scripts/send-message.js --channel CHANNEL_ID --reply-to MESSAGE_ID
 ```
 
-`DISCORD_ALLOW_EVERYONE=true` allows outbound replies to ping `@everyone`.
-Leave it false for safer default behavior.
+To mention another bot or user in a guild channel, include the raw Discord
+mention form in the message, for example `<@USER_OR_BOT_ID>`, and pass
+`--allow-user USER_OR_BOT_ID`. To actually ping `@everyone`, the message
+content must contain `@everyone`, `--allow-everyone` must be passed, and the
+bot must have Discord's Mention Everyone permission in that channel.
 
 ## Development
 

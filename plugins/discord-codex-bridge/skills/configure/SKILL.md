@@ -26,7 +26,13 @@ Show status without revealing secrets:
 
 ## Token or key/value provided
 
-If the user provides a Discord bot token, write or update:
+If the user provides a Discord bot token, prefer the helper:
+
+```bash
+node scripts/manage-access.js configure --token TOKEN
+```
+
+It writes or updates:
 
 ```env
 DISCORD_BOT_TOKEN=<token>
@@ -44,7 +50,8 @@ Common keys:
 
 Implementation rules:
 
-- `mkdir -p ~/.codex/channels/discord`
+- Prefer `scripts/manage-access.js configure --token TOKEN` for tokens.
+- For other keys, `mkdir -p ~/.codex/channels/discord`.
 - Preserve existing `.env` keys not being changed.
 - Write with mode `0600`.
 - Never echo the full token.
@@ -61,5 +68,5 @@ Discord Developer Portal requirements:
 - Enable **Message Content Intent**.
 - Invite the bot with `bot` scope.
 - For guild usage, grant View Channels, Send Messages, Read Message History,
-  Send Messages in Threads, and Add Reactions.
-
+  Send Messages in Threads, Attach Files, Send TTS Messages, Mention Everyone,
+  and Add Reactions as needed.

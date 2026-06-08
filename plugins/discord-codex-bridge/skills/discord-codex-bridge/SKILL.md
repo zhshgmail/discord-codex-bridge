@@ -6,7 +6,7 @@ description: Install, run, diagnose, and operate the Discord Codex bridge. Use w
 # Discord Codex Bridge
 
 Use this skill for a local Discord bot bridge that forwards accepted Discord
-DMs, guild mentions, or opted-in channels into Codex.
+DMs or enabled guild text channels into Codex.
 
 ## Config layout
 
@@ -57,8 +57,10 @@ systemctl --user status discord-codex-bridge.service --no-pager
   immediately.
 - `CODEX_TARGET_MODE=inject`: append a raw user item to an app-server thread.
 
-For `tty`, use `CODEX_TTY_PROMPT_FORMAT=compact` by default. `full` preserves
-the metadata envelope, and `plain` injects only the Discord text.
+For `tty`, use `CODEX_TTY_PROMPT_FORMAT=minimal` by default. It injects only a
+short source marker with channel/message IDs plus the Discord text. `compact`
+adds the helper command, `full` preserves the metadata envelope, and `plain`
+injects only the Discord text.
 
 ## Diagnostics
 
@@ -74,16 +76,32 @@ Check access state:
 node scripts/manage-access.js status
 ```
 
+Read Discord channel context visible to the bot:
+
+```bash
+node scripts/list-channels.js --guild GUILD_ID
+node scripts/view-channel.js --channel CHANNEL_ID
+node scripts/fetch-messages.js --channel CHANNEL_ID --limit 50
+node scripts/read-message.js --channel CHANNEL_ID --message MESSAGE_ID
+```
+
 Send a manual Discord reply from Codex:
 
 ```bash
 printf '%s' 'reply text' | node scripts/send-message.js --channel CHANNEL_ID --reply-to MESSAGE_ID
+printf '%s' 'thread reply' | node scripts/send-message.js --thread THREAD_ID
+printf '%s' 'see attached' | node scripts/send-message.js --channel CHANNEL_ID --file /abs/path/file
+printf '%s' '@everyone update' | node scripts/send-message.js --channel CHANNEL_ID --allow-everyone
 ```
 
 If the bot is online but messages do not reach Codex, verify:
 
 - Discord Developer Portal has Message Content Intent enabled.
-- The sender is in `state.json` `allowedUserIds`, or bootstrap pairing is enabled.
-- Guild messages mention the bot unless the channel is in `allowedChannelIds`.
+- For DMs, the sender is in `state.json` `allowFrom`, or `dmPolicy` is `pairing`
+  and the local user has run `node scripts/manage-access.js pair CODE`.
+- For guild text channels, the channel ID is present in `groups`.
+- Guild messages mention the bot unless that channel has `requireMention: false`.
+- The sender is allowed by channel-level `allowFrom` or global `allowFrom`.
+- Bot-authored messages require `groups[channel].allowBots: true` and an allowed
+  bot ID.
 - `CODEX_TARGET_MODE=tty` can find an interactive `codex ... resume` process, or `CODEX_TTY=/dev/pts/N` is set.
-
