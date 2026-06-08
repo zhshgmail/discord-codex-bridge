@@ -108,7 +108,7 @@ const config = {
   codexTargetMode: (process.env.CODEX_TARGET_MODE || 'turn').toLowerCase(),
   codexTty: process.env.CODEX_TTY || '',
   codexTtyUseSudo: parseBool(process.env.CODEX_TTY_USE_SUDO, true),
-  codexTtyBracketedPaste: parseBool(process.env.CODEX_TTY_BRACKETED_PASTE, true),
+  codexTtyBracketedPaste: parseBool(process.env.CODEX_TTY_BRACKETED_PASTE, false),
   codexTtySubmit: parseBool(process.env.CODEX_TTY_SUBMIT, true),
   codexTtyPromptFormat: (process.env.CODEX_TTY_PROMPT_FORMAT || 'minimal').toLowerCase(),
   codexTtyInjectTimeoutMs: Number(process.env.CODEX_TTY_INJECT_TIMEOUT_MS || 15000),
@@ -889,7 +889,7 @@ function buildTtyPrompt(prompt, metadata) {
   if (config.codexTtyPromptFormat === 'minimal') {
     const attachments = metadata.attachmentCount ? `[${metadata.attachmentCount} attachment(s)]` : '';
     return [
-      `[${source}; channel=${metadata.channelId}; message=${metadata.messageId}]`,
+      `[${source}; channel=${metadata.channelId}; message=${metadata.messageId}; reply=required]`,
       metadata.content || '(attachments only)',
       attachments,
     ].filter(Boolean).join('\n');

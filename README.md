@@ -219,11 +219,18 @@ Prompt formatting:
 
 ```env
 CODEX_TTY_PROMPT_FORMAT=minimal  # minimal | compact | full | plain
+CODEX_TTY_BRACKETED_PASTE=false  # safer for Codex TUI TIOCSTI injection
 ```
 
-`minimal` injects only a one-line source marker with channel/message IDs plus
-the Discord text. `compact` includes the local reply helper command. `full`
-preserves the XML-style metadata envelope. `plain` injects only message text.
+`minimal` injects a one-line source marker with channel/message IDs and
+`reply=required`, plus the Discord text. `compact` includes the local reply
+helper command. `full` preserves the XML-style metadata envelope. `plain`
+injects only message text.
+
+When a current Codex user message has a marker like
+`[Discord DM; channel=...; message=...; reply=required]`, Codex should also
+send the substantive response back to Discord with `send-message.js` before
+returning its normal final answer.
 
 ## App-Server Modes
 
