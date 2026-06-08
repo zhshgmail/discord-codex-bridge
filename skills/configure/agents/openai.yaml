@@ -1,0 +1,7 @@
+interface:
+  display_name: "Configure Discord"
+  short_description: "Set token, proxy, TLS, and bridge mode."
+  default_prompt: "Use $configure to set my Discord bot token and proxy."
+policy:
+  allow_implicit_invocation: true
+

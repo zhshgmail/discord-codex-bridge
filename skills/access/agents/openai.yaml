@@ -1,0 +1,7 @@
+interface:
+  display_name: "Discord Access"
+  short_description: "Manage allowed Discord users and channels."
+  default_prompt: "Use $access to allow my Discord user ID."
+policy:
+  allow_implicit_invocation: true
+

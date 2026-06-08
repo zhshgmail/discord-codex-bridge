@@ -1,0 +1,7 @@
+interface:
+  display_name: "Discord Codex Bridge"
+  short_description: "Run and debug Discord remote access for Codex."
+  default_prompt: "Use $discord-codex-bridge to install and verify my Discord bridge."
+policy:
+  allow_implicit_invocation: true
+

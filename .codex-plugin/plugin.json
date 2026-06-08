@@ -1,0 +1,38 @@
+{
+  "name": "discord-codex-bridge",
+  "version": "0.1.0",
+  "description": "Proxy-aware Discord bridge and setup skills for Codex remote chat/control.",
+  "author": {
+    "name": "zhshgmail",
+    "url": "https://github.com/zhshgmail"
+  },
+  "homepage": "https://github.com/zhshgmail/discord-codex-bridge",
+  "repository": "https://github.com/zhshgmail/discord-codex-bridge",
+  "license": "MIT",
+  "keywords": [
+    "discord",
+    "codex",
+    "bridge",
+    "remote",
+    "proxy"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Discord Codex Bridge",
+    "shortDescription": "Configure and operate Discord remote access for Codex.",
+    "longDescription": "A proxy-aware Discord bot bridge for routing Discord DMs and mentions into Codex, with skills for setup, access management, and local service operation.",
+    "developerName": "zhshgmail",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Messaging",
+      "Automation"
+    ],
+    "defaultPrompt": [
+      "Use $discord-codex-bridge to install the Discord bridge.",
+      "Use $configure to set my Discord bot token and proxy.",
+      "Use $access to allow my Discord user ID."
+    ]
+  }
+}
+

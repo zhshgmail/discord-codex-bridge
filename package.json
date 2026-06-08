@@ -1,0 +1,31 @@
+{
+  "name": "discord-codex-bridge",
+  "version": "0.1.0",
+  "description": "Discord bridge and Codex plugin skills for remote Codex chat/control.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhshgmail/discord-codex-bridge.git"
+  },
+  "homepage": "https://github.com/zhshgmail/discord-codex-bridge",
+  "keywords": [
+    "codex",
+    "discord",
+    "bridge",
+    "plugin",
+    "skill"
+  ],
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check scripts/send-message.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.19.3",
+    "proxy-agent": "^6.5.0",
+    "undici": "^7.10.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
