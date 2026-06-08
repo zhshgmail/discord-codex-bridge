@@ -36,6 +36,13 @@ Never commit `.env` or `state.json`.
 
 ## Setup
 
+Install the Codex plugin/skills from this marketplace repo:
+
+```bash
+codex plugin marketplace add zhshgmail/discord-codex-bridge --ref main
+codex plugin add discord-codex-bridge@discord-codex-bridge
+```
+
 Create a Discord application and bot in the Discord Developer Portal. Enable
 **Message Content Intent**. Invite the bot to a shared server; for guild usage,
 grant View Channels, Send Messages, Read Message History, Send Messages in
@@ -44,6 +51,7 @@ Threads, and Add Reactions.
 Install and create the local config template:
 
 ```bash
+cd plugins/discord-codex-bridge
 npm install
 scripts/install-systemd-user.sh
 ```
@@ -103,6 +111,7 @@ DISCORD_BOOTSTRAP_GUILD_MENTIONS=false
 Manage access:
 
 ```bash
+cd plugins/discord-codex-bridge
 node scripts/manage-access.js status
 node scripts/manage-access.js allow <discord-user-id>
 node scripts/manage-access.js remove <discord-user-id>
@@ -160,6 +169,7 @@ Other modes:
 From any Codex session:
 
 ```bash
+cd plugins/discord-codex-bridge
 printf '%s' 'reply text' | node scripts/send-message.js --channel CHANNEL_ID --reply-to MESSAGE_ID
 ```
 
@@ -169,6 +179,7 @@ Leave it false for safer default behavior.
 ## Development
 
 ```bash
+cd plugins/discord-codex-bridge
 npm run check
 python3 /path/to/plugin-creator/scripts/validate_plugin.py .
 python3 /path/to/skill-creator/scripts/quick_validate.py skills/discord-codex-bridge
