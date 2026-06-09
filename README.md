@@ -221,6 +221,8 @@ Prompt formatting:
 CODEX_TTY_PROMPT_FORMAT=minimal  # minimal | compact | full | plain
 CODEX_TTY_BRACKETED_PASTE=false  # safer for Codex TUI TIOCSTI injection
 CODEX_TTY_SUBMIT_SEQUENCE=cr    # cr | lf | crlf | lfcr | none | escaped string
+CODEX_TTY_SPLIT_SUBMIT=true     # inject text, wait, then inject submit key
+CODEX_TTY_SUBMIT_DELAY_MS=500
 CODEX_TTY_ACK_ON_DELIVERY=false # do not post "Delivered..." ack messages
 ```
 
@@ -228,6 +230,10 @@ CODEX_TTY_ACK_ON_DELIVERY=false # do not post "Delivered..." ack messages
 Discord author ID/name plus `reply=required`, then the Discord text. `compact`
 includes the local reply helper command. `full` preserves the XML-style
 metadata envelope. `plain` injects only message text.
+
+TTY mode serializes all accepted Discord messages through one global TTY queue,
+even when they arrive from different Discord channels. This prevents split
+submit delays from interleaving two Discord messages in the same Codex input.
 
 When a current Codex user message has a marker like
 `[Discord DM; channel=...; message=...; reply=required]`, Codex should also

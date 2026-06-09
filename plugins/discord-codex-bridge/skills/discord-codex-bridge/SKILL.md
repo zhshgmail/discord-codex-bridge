@@ -94,11 +94,16 @@ source marker with channel/message IDs, Discord author ID/name, and
 `full` preserves the metadata envelope, and `plain` injects only the Discord
 text.
 
-Use `CODEX_TTY_BRACKETED_PASTE=false`, `CODEX_TTY_SUBMIT_SEQUENCE=cr`, and
-`CODEX_TTY_ACK_ON_DELIVERY=false` by default. `cr` matches the Enter key in
-the current Codex TUI raw-mode sessions; use `lf`, `crlf`, or `lfcr` only for
-terminal-specific tuning. Ack-on-delivery causes noisy "Delivered Discord
+Use `CODEX_TTY_BRACKETED_PASTE=false`, `CODEX_TTY_SUBMIT_SEQUENCE=cr`,
+`CODEX_TTY_SPLIT_SUBMIT=true`, `CODEX_TTY_SUBMIT_DELAY_MS=500`, and
+`CODEX_TTY_ACK_ON_DELIVERY=false` by default. Split submit injects the Discord
+text, waits, then injects the submit key so the Codex TUI can update input
+state before receiving Enter. Ack-on-delivery causes noisy "Delivered Discord
 message..." replies before Codex has actually responded.
+
+TTY mode uses one global queue for all accepted Discord messages, not one queue
+per Discord channel. This prevents split-submit delays from interleaving DM,
+guild channel, or thread messages in the same Codex input buffer.
 
 ## Diagnostics
 

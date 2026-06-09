@@ -111,6 +111,8 @@ const config = {
   codexTtyBracketedPaste: parseBool(process.env.CODEX_TTY_BRACKETED_PASTE, false),
   codexTtySubmit: parseBool(process.env.CODEX_TTY_SUBMIT, true),
   codexTtySubmitSequence: process.env.CODEX_TTY_SUBMIT_SEQUENCE || 'cr',
+  codexTtySplitSubmit: parseBool(process.env.CODEX_TTY_SPLIT_SUBMIT, true),
+  codexTtySubmitDelayMs: Number(process.env.CODEX_TTY_SUBMIT_DELAY_MS || 500),
   codexTtyAckOnDelivery: parseBool(process.env.CODEX_TTY_ACK_ON_DELIVERY, false),
   codexTtyPromptFormat: (process.env.CODEX_TTY_PROMPT_FORMAT || 'minimal').toLowerCase(),
   codexTtyInjectTimeoutMs: Number(process.env.CODEX_TTY_INJECT_TIMEOUT_MS || 15000),
@@ -414,15 +416,16 @@ class CodexConversationManager {
   }
 
   async send(chatId, prompt, metadata) {
-    const previous = this.queues.get(chatId) || Promise.resolve();
+    const queueKey = config.codexTargetMode === 'tty' ? 'tty' : chatId;
+    const previous = this.queues.get(queueKey) || Promise.resolve();
     const current = previous
       .catch(() => {})
       .then(() => this.runTurn(chatId, prompt, metadata));
-    this.queues.set(chatId, current);
+    this.queues.set(queueKey, current);
     try {
       return await current;
     } finally {
-      if (this.queues.get(chatId) === current) this.queues.delete(chatId);
+      if (this.queues.get(queueKey) === current) this.queues.delete(queueKey);
     }
   }
 
@@ -1047,8 +1050,14 @@ async function injectDiscordMessageIntoCodexTty(prompt, metadata) {
   const tty = resolveCodexTty();
   const text = terminalSafeText(buildTtyPrompt(prompt, metadata));
   const submit = config.codexTtySubmit ? decodeSubmitSequence(config.codexTtySubmitSequence) : '';
-  const input = config.codexTtyBracketedPaste ? `\x1b[200~${text}\x1b[201~${submit}` : `${text}${submit}`;
-  await runTtyInjector(tty, Buffer.from(input, 'utf8'));
+  const body = config.codexTtyBracketedPaste ? `\x1b[200~${text}\x1b[201~` : text;
+  if (submit && config.codexTtySplitSubmit) {
+    await runTtyInjector(tty, Buffer.from(body, 'utf8'));
+    await sleep(config.codexTtySubmitDelayMs);
+    await runTtyInjector(tty, Buffer.from(submit, 'utf8'));
+  } else {
+    await runTtyInjector(tty, Buffer.from(`${body}${submit}`, 'utf8'));
+  }
   log('INFO', 'Injected Discord message into Codex TTY', {
     tty,
     messageId: metadata.messageId,
@@ -1058,8 +1067,15 @@ async function injectDiscordMessageIntoCodexTty(prompt, metadata) {
     bracketedPaste: config.codexTtyBracketedPaste,
     submitted: config.codexTtySubmit,
     submitSequence: config.codexTtySubmit ? config.codexTtySubmitSequence : 'none',
+    splitSubmit: Boolean(submit && config.codexTtySplitSubmit),
+    submitDelayMs: submit && config.codexTtySplitSubmit ? config.codexTtySubmitDelayMs : 0,
   });
   return tty;
+}
+
+function sleep(ms) {
+  const delay = Number.isFinite(ms) ? Math.max(0, ms) : 0;
+  return new Promise(resolve => setTimeout(resolve, delay));
 }
 
 function decodeSubmitSequence(value) {
@@ -1189,6 +1205,8 @@ async function main() {
       targetThreadId: config.codexTargetThreadId || null,
       targetMode: config.codexTargetThreadId ? config.codexTargetMode : null,
       ttySubmitSequence: config.codexTtySubmitSequence,
+      ttySplitSubmit: config.codexTtySplitSubmit,
+      ttySubmitDelayMs: config.codexTtySubmitDelayMs,
       ttyAckOnDelivery: config.codexTtyAckOnDelivery,
     });
   });
