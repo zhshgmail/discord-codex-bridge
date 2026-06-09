@@ -220,6 +220,8 @@ Prompt formatting:
 ```env
 CODEX_TTY_PROMPT_FORMAT=minimal  # minimal | compact | full | plain
 CODEX_TTY_BRACKETED_PASTE=false  # safer for Codex TUI TIOCSTI injection
+CODEX_TTY_SUBMIT_SEQUENCE=lf    # lf | cr | crlf | lfcr | none | escaped string
+CODEX_TTY_ACK_ON_DELIVERY=false # do not post "Delivered..." ack messages
 ```
 
 `minimal` injects a one-line source marker with channel/message IDs and
@@ -254,11 +256,17 @@ cd plugins/discord-codex-bridge
 printf '%s' 'reply text' | node scripts/send-message.js --channel CHANNEL_ID --reply-to MESSAGE_ID
 ```
 
-To mention another bot or user in a guild channel, include the raw Discord
-mention form in the message, for example `<@USER_OR_BOT_ID>`, and pass
-`--allow-user USER_OR_BOT_ID`. To actually ping `@everyone`, the message
-content must contain `@everyone`, `--allow-everyone` must be passed, and the
-bot must have Discord's Mention Everyone permission in that channel.
+To address another bot or user in a guild channel, ping the target explicitly:
+
+```bash
+printf '%s' 'question text' | node scripts/send-message.js --channel CHANNEL_ID --mention USER_OR_BOT_ID
+```
+
+`--mention ID` prepends `<@ID>` and permits that user/bot mention through
+Discord `allowed_mentions`. Use `--reply-mention` when a reply should ping the
+author of the referenced message. To actually ping `@everyone`, the message
+content must contain `@everyone`, `--allow-everyone` must be passed, and the bot
+must have Discord's Mention Everyone permission in that channel.
 
 ## Development
 

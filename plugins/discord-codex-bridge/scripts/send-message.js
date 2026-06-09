@@ -62,7 +62,7 @@ function usage() {
       'Usage: send-message.js --channel CHANNEL_ID [--reply-to MESSAGE_ID] [--content TEXT] [--file PATH] [--tts]',
       '       send-message.js --thread THREAD_ID [--content TEXT] [--file PATH]',
       'If --content is omitted, message content is read from stdin.',
-      'Mentions are suppressed by default. Use --allow-user ID to ping a user/bot, --allow-role ID for a role, or --allow-everyone for @everyone/@here.',
+      'Mentions are suppressed by default. Use --mention ID to prepend and ping a user/bot, --reply-mention to ping the replied user, --allow-role ID for a role, or --allow-everyone for @everyone/@here.',
       '',
     ].join('\n'),
   );
@@ -76,6 +76,8 @@ function parseArgs(argv) {
     allowEveryone: null,
     allowUsers: [],
     allowRoles: [],
+    mentionUsers: [],
+    replyMention: false,
     files: [],
     tts: false,
   };
@@ -91,6 +93,10 @@ function parseArgs(argv) {
     else if (arg === '--no-everyone') args.allowEveryone = false;
     else if (arg === '--allow-user') args.allowUsers.push(...splitCsv(argv[++i] || ''));
     else if (arg === '--allow-users') args.allowUsers.push(...splitCsv(argv[++i] || ''));
+    else if (arg === '--mention') args.mentionUsers.push(...splitCsv(argv[++i] || ''));
+    else if (arg === '--mention-user') args.mentionUsers.push(...splitCsv(argv[++i] || ''));
+    else if (arg === '--mention-users') args.mentionUsers.push(...splitCsv(argv[++i] || ''));
+    else if (arg === '--reply-mention') args.replyMention = true;
     else if (arg === '--allow-role') args.allowRoles.push(...splitCsv(argv[++i] || ''));
     else if (arg === '--allow-roles') args.allowRoles.push(...splitCsv(argv[++i] || ''));
     else if (arg === '--help' || arg === '-h') {
@@ -148,7 +154,7 @@ function validateFiles(files) {
 }
 
 function buildAllowedMentions(args) {
-  const users = [...new Set(args.allowUsers)];
+  const users = [...new Set([...args.allowUsers, ...args.mentionUsers])];
   const roles = [...new Set(args.allowRoles)];
   for (const id of users) assertSnowflake(id, '--allow-user');
   for (const id of roles) assertSnowflake(id, '--allow-role');
@@ -162,8 +168,16 @@ function buildAllowedMentions(args) {
     parse,
     users,
     roles,
-    replied_user: false,
+    replied_user: Boolean(args.replyMention),
   };
+}
+
+function applyMentionPrefix(content, args) {
+  const mentionUsers = [...new Set(args.mentionUsers)];
+  for (const id of mentionUsers) assertSnowflake(id, '--mention');
+  const missing = mentionUsers.filter(id => !String(content).includes(`<@${id}>`) && !String(content).includes(`<@!${id}>`));
+  if (!missing.length) return content;
+  return `${missing.map(id => `<@${id}>`).join(' ')} ${content}`.trim();
 }
 
 async function createRequestBody({ chunk, args, attachments, isFirstChunk }) {
@@ -237,7 +251,7 @@ async function main() {
     );
   }
 
-  const content = args.content === null ? readStdin() : args.content;
+  const content = applyMentionPrefix(args.content === null ? readStdin() : args.content, args);
   const attachments = validateFiles(args.files.filter(Boolean));
 
   let lastResponse = null;

@@ -110,6 +110,8 @@ const config = {
   codexTtyUseSudo: parseBool(process.env.CODEX_TTY_USE_SUDO, true),
   codexTtyBracketedPaste: parseBool(process.env.CODEX_TTY_BRACKETED_PASTE, false),
   codexTtySubmit: parseBool(process.env.CODEX_TTY_SUBMIT, true),
+  codexTtySubmitSequence: process.env.CODEX_TTY_SUBMIT_SEQUENCE || 'lf',
+  codexTtyAckOnDelivery: parseBool(process.env.CODEX_TTY_ACK_ON_DELIVERY, false),
   codexTtyPromptFormat: (process.env.CODEX_TTY_PROMPT_FORMAT || 'minimal').toLowerCase(),
   codexTtyInjectTimeoutMs: Number(process.env.CODEX_TTY_INJECT_TIMEOUT_MS || 15000),
   discordSendHelper: process.env.DISCORD_SEND_HELPER || path.join(__dirname, '..', 'scripts', 'send-message.js'),
@@ -427,7 +429,9 @@ class CodexConversationManager {
   async runTurn(chatId, prompt, metadata) {
     if (config.codexTargetMode === 'tty') {
       const tty = await injectDiscordMessageIntoCodexTty(prompt, metadata);
-      return `Delivered Discord message ${metadata.messageId} into current Codex TTY ${tty}.`;
+      return config.codexTtyAckOnDelivery
+        ? `Delivered Discord message ${metadata.messageId} into current Codex TTY ${tty}.`
+        : null;
     }
 
     await this.app.ensureStarted();
@@ -1038,7 +1042,7 @@ function runTtyInjector(targetTty, input) {
 async function injectDiscordMessageIntoCodexTty(prompt, metadata) {
   const tty = resolveCodexTty();
   const text = terminalSafeText(buildTtyPrompt(prompt, metadata));
-  const submit = config.codexTtySubmit ? '\r' : '';
+  const submit = config.codexTtySubmit ? decodeSubmitSequence(config.codexTtySubmitSequence) : '';
   const input = config.codexTtyBracketedPaste ? `\x1b[200~${text}\x1b[201~${submit}` : `${text}${submit}`;
   await runTtyInjector(tty, Buffer.from(input, 'utf8'));
   log('INFO', 'Injected Discord message into Codex TTY', {
@@ -1049,8 +1053,23 @@ async function injectDiscordMessageIntoCodexTty(prompt, metadata) {
     sudo: config.codexTtyUseSudo,
     bracketedPaste: config.codexTtyBracketedPaste,
     submitted: config.codexTtySubmit,
+    submitSequence: config.codexTtySubmit ? config.codexTtySubmitSequence : 'none',
   });
   return tty;
+}
+
+function decodeSubmitSequence(value) {
+  const normalized = String(value || 'lf').toLowerCase();
+  if (normalized === 'none' || normalized === 'off' || normalized === 'false') return '';
+  if (normalized === 'cr') return '\r';
+  if (normalized === 'lf') return '\n';
+  if (normalized === 'crlf') return '\r\n';
+  if (normalized === 'lfcr') return '\n\r';
+  return String(value)
+    .replace(/\\r/g, '\r')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t')
+    .replace(/\\e/g, '\x1b');
 }
 
 function channelLabel(message) {
@@ -1165,6 +1184,8 @@ async function main() {
       approvalPolicy: config.codexApprovalPolicy,
       targetThreadId: config.codexTargetThreadId || null,
       targetMode: config.codexTargetThreadId ? config.codexTargetMode : null,
+      ttySubmitSequence: config.codexTtySubmitSequence,
+      ttyAckOnDelivery: config.codexTtyAckOnDelivery,
     });
   });
 
@@ -1222,7 +1243,9 @@ async function main() {
       const prompt = buildPrompt(message, content);
       const response = await codex.send(message.channelId, prompt, metadataFor(message, content));
       stopTyping();
-      await replyInChunks(message, response || '(Codex returned no text.)');
+      if (typeof response === 'string' && response.trim()) {
+        await replyInChunks(message, response);
+      }
     } catch (error) {
       stopTyping();
       log('ERROR', 'Failed to process Discord message', {
