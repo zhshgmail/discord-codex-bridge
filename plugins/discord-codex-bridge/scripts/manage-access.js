@@ -2,8 +2,8 @@
 'use strict';
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
+const { resolveDiscordPaths } = require('../src/config-paths');
 const {
   DM_POLICIES,
   loadState,
@@ -12,9 +12,6 @@ const {
   addUnique,
   removeValue,
 } = require('../src/access-state');
-
-const DEFAULT_CONFIG_DIR = path.join(os.homedir(), '.codex', 'channels', 'discord');
-const DEFAULT_BRIDGE_ENV_FILE = path.join(os.homedir(), '.config', 'discord-codex-bridge.env');
 
 function usage() {
   process.stderr.write(`Usage:
@@ -103,16 +100,24 @@ function parseArgs(argv) {
     }
   }
 
-  loadEnvFile(process.env.DISCORD_BRIDGE_ENV_FILE || DEFAULT_BRIDGE_ENV_FILE);
-  const configDir = flags.configDir || process.env.DISCORD_CONFIG_DIR || process.env.DISCORD_STATE_DIR || DEFAULT_CONFIG_DIR;
-  const stateDir = flags.configDir ? configDir : process.env.DISCORD_BRIDGE_STATE_DIR || process.env.DISCORD_STATE_DIR || configDir;
-  const envFile = flags.configDir ? path.join(configDir, '.env') : process.env.DISCORD_ENV_FILE || path.join(configDir, '.env');
+  let discordPaths = resolveDiscordPaths(process.env);
+  loadEnvFile(discordPaths.bridgeEnvFile);
+  const pathEnv = { ...process.env };
+  if (flags.configDir) {
+    pathEnv.DISCORD_CONFIG_DIR = flags.configDir;
+    delete pathEnv.DISCORD_ENV_FILE;
+    delete pathEnv.DISCORD_STATE_DIR;
+    delete pathEnv.DISCORD_BRIDGE_STATE_DIR;
+  }
+  discordPaths = resolveDiscordPaths(pathEnv);
+  const configDir = discordPaths.configDir;
+  const envFile = discordPaths.envFile;
   return {
     positional,
     flags,
     configDir,
     envFile,
-    statePath: flags.statePath || path.join(stateDir, 'state.json'),
+    statePath: flags.statePath || path.join(discordPaths.stateDir, 'state.json'),
   };
 }
 

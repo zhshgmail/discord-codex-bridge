@@ -16,7 +16,7 @@ The repository also ships Codex skills for setup and access management:
 
 ## Config Directory
 
-By default, all local config and state lives under:
+By default, all local config and state lives under the single-instance path:
 
 ```text
 ~/.codex/channels/discord/
@@ -33,6 +33,31 @@ but uses Codex's home directory. Override paths with:
 - `DISCORD_BRIDGE_STATE_DIR`
 
 Never commit `.env` or `state.json`.
+
+For multiple Discord bots on the same Linux user, set an instance name instead
+of sharing the default directory:
+
+```bash
+DISCORD_BRIDGE_INSTANCE=codex01 scripts/install-systemd-user.sh
+DISCORD_BRIDGE_INSTANCE=codex02 scripts/install-systemd-user.sh
+```
+
+That creates isolated paths:
+
+```text
+~/.codex/channels/discord/codex01/.env
+~/.codex/channels/discord/codex01/state.json
+~/.config/discord-codex-bridge/codex01.env
+discord-codex-bridge@codex01.service
+```
+
+Each instance should have its own Discord bot token, access state, target Codex
+thread, and app-server socket. Helper scripts honor the same instance:
+
+```bash
+DISCORD_BRIDGE_INSTANCE=codex01 node scripts/manage-access.js status
+DISCORD_BRIDGE_INSTANCE=codex02 node scripts/fetch-messages.js --channel CHANNEL_ID
+```
 
 ## Setup
 
@@ -57,6 +82,12 @@ npm install
 scripts/install-systemd-user.sh
 ```
 
+For an isolated named bot:
+
+```bash
+scripts/install-systemd-user.sh --instance codex01
+```
+
 Edit `~/.codex/channels/discord/.env`:
 
 ```env
@@ -70,6 +101,13 @@ Start the service:
 ```bash
 systemctl --user restart discord-codex-bridge.service
 systemctl --user status discord-codex-bridge.service --no-pager
+```
+
+For a named instance, edit `~/.codex/channels/discord/codex01/.env` and use:
+
+```bash
+systemctl --user restart discord-codex-bridge@codex01.service
+systemctl --user status discord-codex-bridge@codex01.service --no-pager
 ```
 
 ## Proxy and Corporate TLS
@@ -202,6 +240,12 @@ History output is oldest-first and capped at 100 messages per call.
 interactive `codex resume` terminal. This is the only mode that reaches an
 already-open Codex TUI session.
 
+TTY mode is inherently unsafe when a local user may be typing in the Codex TUI.
+Codex owns an internal text buffer; TTY injection only simulates keyboard input,
+so it cannot see or protect a half-typed local draft. A Discord delivery can
+therefore submit local text and Discord text together. Use shared app-server
+socket mode for robust current-session bridging.
+
 The bridge auto-detects a `codex ... resume` TTY. If multiple sessions exist,
 set:
 
@@ -227,9 +271,10 @@ CODEX_TTY_ACK_ON_DELIVERY=false # do not post "Delivered..." ack messages
 ```
 
 `minimal` injects a one-line source marker with channel/message IDs and
-Discord author ID/name plus `reply=required`, then the Discord text. `compact`
-includes the local reply helper command. `full` preserves the XML-style
-metadata envelope. `plain` injects only message text.
+Discord author ID/name plus `reply=required`, then the Discord text and an end
+marker. The end marker helps Codex identify accidental local TUI draft
+collisions. `compact` includes the local reply helper command. `full` preserves
+the XML-style metadata envelope. `plain` injects only message text.
 
 TTY mode serializes all accepted Discord messages through one global TTY queue,
 even when they arrive from different Discord channels. This prevents split
@@ -250,8 +295,38 @@ thread. Without it, the bridge creates one Codex thread per Discord channel.
 
 Other modes:
 
-- `wake`: start a turn and acknowledge Discord immediately.
+- `wake`: start a turn in the target thread and, by default, avoid a noisy
+  delivery acknowledgement. The bridge unsubscribes from the target thread after
+  starting the turn so the interactive TUI remains the primary event consumer.
 - `inject`: append a raw user item to the target thread.
+
+For a current interactive Codex session without TTY injection, run the TUI and
+the bridge against the same Unix app-server socket:
+
+```bash
+mkdir -p ~/.codex/app-server-discord/codex01
+codex app-server --listen unix://$HOME/.codex/app-server-discord/codex01/app-server.sock
+```
+
+In another terminal, connect the Codex TUI to that socket:
+
+```bash
+codex --remote unix://$HOME/.codex/app-server-discord/codex01/app-server.sock resume THREAD_ID
+```
+
+Set the matching instance `.env`:
+
+```env
+CODEX_TARGET_MODE=wake
+CODEX_TARGET_THREAD_ID=THREAD_ID
+CODEX_TARGET_THREAD_RESUME=false
+CODEX_APP_SERVER_SOCKET=/home/YOU/.codex/app-server-discord/codex01/app-server.sock
+CODEX_DENY_SERVER_REQUESTS=false
+CODEX_WAKE_ACK_ON_DELIVERY=false
+```
+
+Use one socket per Discord bridge instance. Sharing a socket across instances
+can mix event subscriptions, approvals, and target thread routing.
 
 ## Manual Reply Helper
 

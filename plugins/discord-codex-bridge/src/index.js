@@ -2,20 +2,17 @@
 'use strict';
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const readline = require('node:readline');
+const { resolveDiscordPaths } = require('./config-paths');
 const {
   loadState,
   saveState,
 } = require('./access-state');
 
-const DEFAULT_CONFIG_DIR = path.join(os.homedir(), '.codex', 'channels', 'discord');
-const DEFAULT_ENV_FILE = path.join(DEFAULT_CONFIG_DIR, '.env');
-const DEFAULT_BRIDGE_ENV_FILE = path.join(os.homedir(), '.config', 'discord-codex-bridge.env');
 const DEFAULT_CWD = process.cwd();
 
 function log(level, message, meta) {
@@ -55,13 +52,20 @@ function loadEnvFile(file) {
   }
 }
 
-loadEnvFile(process.env.DISCORD_BRIDGE_ENV_FILE || DEFAULT_BRIDGE_ENV_FILE);
-const configDir = process.env.DISCORD_CONFIG_DIR || process.env.DISCORD_STATE_DIR || DEFAULT_CONFIG_DIR;
-loadEnvFile(process.env.DISCORD_ENV_FILE || path.join(configDir, '.env'));
+let discordPaths = resolveDiscordPaths(process.env);
+loadEnvFile(discordPaths.bridgeEnvFile);
+discordPaths = resolveDiscordPaths(process.env);
+loadEnvFile(discordPaths.envFile);
+discordPaths = resolveDiscordPaths(process.env);
 
 if (parseBool(process.env.DISCORD_INSECURE_TLS, false)) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 }
+
+const codexAppServerSocket =
+  process.env.CODEX_APP_SERVER_SOCKET ||
+  process.env.CODEX_APP_SERVER_SOCK ||
+  '';
 
 const {
   Agent: UndiciAgent,
@@ -86,6 +90,7 @@ function requireDiscordUndici() {
 }
 
 const config = {
+  instance: discordPaths.instance,
   token: process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN,
   proxyUrl:
     process.env.DISCORD_PROXY_URL ||
@@ -95,17 +100,18 @@ const config = {
     process.env.http_proxy ||
     '',
   insecureTls: parseBool(process.env.DISCORD_INSECURE_TLS, false),
-  stateDir:
-    process.env.DISCORD_BRIDGE_STATE_DIR ||
-    process.env.DISCORD_STATE_DIR ||
-    configDir,
+  stateDir: discordPaths.stateDir,
   codexCwd: process.env.CODEX_CWD || DEFAULT_CWD,
   codexBin: process.env.CODEX_BIN || 'codex',
   codexModel: process.env.CODEX_MODEL || null,
   codexApprovalPolicy: process.env.CODEX_APPROVAL_POLICY || 'never',
   codexSandbox: process.env.CODEX_SANDBOX || 'workspace-write',
+  codexAppServerSocket,
+  codexDenyServerRequests: parseBool(process.env.CODEX_DENY_SERVER_REQUESTS, !codexAppServerSocket),
   codexTargetThreadId: process.env.CODEX_TARGET_THREAD_ID || '',
+  codexTargetThreadResume: parseBool(process.env.CODEX_TARGET_THREAD_RESUME, true),
   codexTargetMode: (process.env.CODEX_TARGET_MODE || 'turn').toLowerCase(),
+  codexWakeAckOnDelivery: parseBool(process.env.CODEX_WAKE_ACK_ON_DELIVERY, false),
   codexTty: process.env.CODEX_TTY || '',
   codexTtyUseSudo: parseBool(process.env.CODEX_TTY_USE_SUDO, true),
   codexTtyBracketedPaste: parseBool(process.env.CODEX_TTY_BRACKETED_PASTE, false),
@@ -128,7 +134,7 @@ const config = {
 };
 
 if (!config.token) {
-  log('ERROR', `DISCORD_BOT_TOKEN is missing. Set it in ${process.env.DISCORD_ENV_FILE || DEFAULT_ENV_FILE}.`);
+  log('ERROR', `DISCORD_BOT_TOKEN is missing. Set it in ${discordPaths.envFile}.`);
   process.exit(1);
 }
 
@@ -248,7 +254,14 @@ class CodexAppServer extends EventEmitter {
       env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
     }
 
-    this.proc = spawn(config.codexBin, ['app-server', '--listen', 'stdio://'], {
+    const args = config.codexAppServerSocket
+      ? ['app-server', 'proxy', '--sock', config.codexAppServerSocket]
+      : ['app-server', '--listen', 'stdio://'];
+    const transport = config.codexAppServerSocket
+      ? `unix://${config.codexAppServerSocket}`
+      : 'stdio://private';
+
+    this.proc = spawn(config.codexBin, args, {
       cwd: config.codexCwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -256,7 +269,7 @@ class CodexAppServer extends EventEmitter {
 
     this.proc.once('exit', (code, signal) => {
       this.started = false;
-      const error = new Error(`codex app-server exited code=${code} signal=${signal}`);
+      const error = new Error(`codex app-server transport exited code=${code} signal=${signal}`);
       for (const { reject } of this.pending.values()) reject(error);
       this.pending.clear();
       this.emit('exit', error);
@@ -294,7 +307,7 @@ class CodexAppServer extends EventEmitter {
     });
     this.notify('initialized');
     this.started = true;
-    log('INFO', 'Codex app-server initialized');
+    log('INFO', 'Codex app-server initialized', { transport });
   }
 
   handleLine(line) {
@@ -335,6 +348,10 @@ class CodexAppServer extends EventEmitter {
 
   handleServerRequest(message) {
     const method = message.method;
+    if (!config.codexDenyServerRequests) {
+      log('WARN', 'Ignoring app-server server request for external UI handling', { method });
+      return;
+    }
     log('WARN', 'Denying app-server server request', { method });
     if (method === 'item/commandExecution/requestApproval') {
       this.respond(message.id, { decision: 'decline' });
@@ -439,14 +456,17 @@ class CodexConversationManager {
 
     await this.app.ensureStarted();
     const threadId = await this.ensureThread(chatId, metadata);
+    const turnPrompt = config.codexTargetThreadId && config.codexTargetMode === 'wake'
+      ? buildTtyPrompt(prompt, metadata)
+      : prompt;
     if (config.codexTargetThreadId && config.codexTargetMode === 'inject') {
-      await this.injectMessage(threadId, prompt, metadata);
+      await this.injectMessage(threadId, turnPrompt, metadata);
       return `Injected Discord message ${metadata.messageId} into Codex thread ${threadId}.`;
     }
     const result = await this.app.request('turn/start', {
       threadId,
       clientUserMessageId: metadata.messageId,
-      input: [{ type: 'text', text: prompt, text_elements: [] }],
+      input: [{ type: 'text', text: turnPrompt, text_elements: [] }],
       responsesapiClientMetadata: {
         source: 'discord',
         discord_chat_id: chatId,
@@ -466,6 +486,19 @@ class CodexConversationManager {
     });
     const turnId = result.turn.id;
     if (config.codexTargetThreadId && config.codexTargetMode === 'wake') {
+      await this.app.request('thread/unsubscribe', { threadId }, 10000)
+        .then(response => {
+          log('INFO', 'Unsubscribed bridge app-server connection from Codex target thread', {
+            threadId,
+            status: response.status,
+          });
+        })
+        .catch(error => {
+          log('WARN', 'Failed to unsubscribe bridge app-server connection from Codex target thread', {
+            threadId,
+            error: error.message,
+          });
+        });
       log('INFO', 'Delivered Discord message into Codex target thread', {
         threadId,
         turnId,
@@ -473,7 +506,9 @@ class CodexConversationManager {
         channelId: metadata.channelId,
         guildId: metadata.guildId,
       });
-      return `Delivered Discord message ${metadata.messageId} into Codex thread ${threadId}.`;
+      return config.codexWakeAckOnDelivery
+        ? `Delivered Discord message ${metadata.messageId} into Codex thread ${threadId}.`
+        : null;
     }
     return await this.waitForTurn(threadId, turnId);
   }
@@ -500,6 +535,9 @@ class CodexConversationManager {
   async ensureThread(chatId, metadata) {
     if (config.codexTargetThreadId) {
       const cacheKey = `target:${config.codexTargetThreadId}`;
+      if (!config.codexTargetThreadResume) {
+        return config.codexTargetThreadId;
+      }
       if (!this.threadReady.has(cacheKey)) {
         this.threadReady.set(
           cacheKey,
@@ -903,6 +941,7 @@ function buildTtyPrompt(prompt, metadata) {
       `[${source}; channel=${metadata.channelId}; message=${metadata.messageId}; author=${metadata.authorId}; author_name=${authorName}; reply=required]`,
       metadata.content || '(attachments only)',
       attachments,
+      `[/Discord message ${metadata.messageId}]`,
     ].filter(Boolean).join('\n');
   }
 
@@ -1192,6 +1231,10 @@ async function main() {
 
   client.once(Events.ClientReady, readyClient => {
     log('INFO', 'Discord bridge bot is online', {
+      instance: config.instance || null,
+      configDir: discordPaths.configDir,
+      envFile: discordPaths.envFile,
+      stateDir: config.stateDir,
       tag: readyClient.user.tag,
       id: readyClient.user.id,
       dmPolicy: state.dmPolicy,
@@ -1202,8 +1245,12 @@ async function main() {
       cwd: config.codexCwd,
       sandbox: config.codexSandbox,
       approvalPolicy: config.codexApprovalPolicy,
+      appServerSocket: config.codexAppServerSocket || null,
+      denyServerRequests: config.codexDenyServerRequests,
       targetThreadId: config.codexTargetThreadId || null,
       targetMode: config.codexTargetThreadId ? config.codexTargetMode : null,
+      targetThreadResume: config.codexTargetThreadResume,
+      wakeAckOnDelivery: config.codexWakeAckOnDelivery,
       ttySubmitSequence: config.codexTtySubmitSequence,
       ttySplitSubmit: config.codexTtySplitSubmit,
       ttySubmitDelayMs: config.codexTtySubmitDelayMs,

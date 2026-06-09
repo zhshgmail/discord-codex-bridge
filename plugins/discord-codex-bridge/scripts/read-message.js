@@ -2,12 +2,8 @@
 'use strict';
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
-
-const DEFAULT_CONFIG_DIR = path.join(os.homedir(), '.codex', 'channels', 'discord');
-const DEFAULT_ENV_FILE = path.join(DEFAULT_CONFIG_DIR, '.env');
-const DEFAULT_BRIDGE_ENV_FILE = path.join(os.homedir(), '.config', 'discord-codex-bridge.env');
+const { resolveDiscordPaths } = require('../src/config-paths');
 
 function parseBool(value, fallback = false) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -139,9 +135,11 @@ function formatText(message) {
 }
 
 async function main() {
-  loadEnvFile(process.env.DISCORD_BRIDGE_ENV_FILE || DEFAULT_BRIDGE_ENV_FILE);
-  const configDir = process.env.DISCORD_CONFIG_DIR || process.env.DISCORD_STATE_DIR || DEFAULT_CONFIG_DIR;
-  loadEnvFile(process.env.DISCORD_ENV_FILE || path.join(configDir, '.env'));
+  let discordPaths = resolveDiscordPaths(process.env);
+  loadEnvFile(discordPaths.bridgeEnvFile);
+  discordPaths = resolveDiscordPaths(process.env);
+  loadEnvFile(discordPaths.envFile);
+  discordPaths = resolveDiscordPaths(process.env);
 
   const args = parseArgs(process.argv.slice(2));
   if (!args.channel || !args.message) {
@@ -150,7 +148,7 @@ async function main() {
   }
 
   const token = process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN;
-  if (!token) throw new Error(`DISCORD_BOT_TOKEN is missing. Set it in ${process.env.DISCORD_ENV_FILE || DEFAULT_ENV_FILE}.`);
+  if (!token) throw new Error(`DISCORD_BOT_TOKEN is missing. Set it in ${discordPaths.envFile}.`);
 
   const insecureTls = parseBool(process.env.DISCORD_INSECURE_TLS, false);
   if (insecureTls) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
