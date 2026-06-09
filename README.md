@@ -220,14 +220,14 @@ Prompt formatting:
 ```env
 CODEX_TTY_PROMPT_FORMAT=minimal  # minimal | compact | full | plain
 CODEX_TTY_BRACKETED_PASTE=false  # safer for Codex TUI TIOCSTI injection
-CODEX_TTY_SUBMIT_SEQUENCE=lf    # lf | cr | crlf | lfcr | none | escaped string
+CODEX_TTY_SUBMIT_SEQUENCE=cr    # cr | lf | crlf | lfcr | none | escaped string
 CODEX_TTY_ACK_ON_DELIVERY=false # do not post "Delivered..." ack messages
 ```
 
 `minimal` injects a one-line source marker with channel/message IDs and
-`reply=required`, plus the Discord text. `compact` includes the local reply
-helper command. `full` preserves the XML-style metadata envelope. `plain`
-injects only message text.
+Discord author ID/name plus `reply=required`, then the Discord text. `compact`
+includes the local reply helper command. `full` preserves the XML-style
+metadata envelope. `plain` injects only message text.
 
 When a current Codex user message has a marker like
 `[Discord DM; channel=...; message=...; reply=required]`, Codex should also

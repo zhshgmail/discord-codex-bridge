@@ -110,7 +110,7 @@ const config = {
   codexTtyUseSudo: parseBool(process.env.CODEX_TTY_USE_SUDO, true),
   codexTtyBracketedPaste: parseBool(process.env.CODEX_TTY_BRACKETED_PASTE, false),
   codexTtySubmit: parseBool(process.env.CODEX_TTY_SUBMIT, true),
-  codexTtySubmitSequence: process.env.CODEX_TTY_SUBMIT_SEQUENCE || 'lf',
+  codexTtySubmitSequence: process.env.CODEX_TTY_SUBMIT_SEQUENCE || 'cr',
   codexTtyAckOnDelivery: parseBool(process.env.CODEX_TTY_ACK_ON_DELIVERY, false),
   codexTtyPromptFormat: (process.env.CODEX_TTY_PROMPT_FORMAT || 'minimal').toLowerCase(),
   codexTtyInjectTimeoutMs: Number(process.env.CODEX_TTY_INJECT_TIMEOUT_MS || 15000),
@@ -892,8 +892,12 @@ function buildTtyPrompt(prompt, metadata) {
 
   if (config.codexTtyPromptFormat === 'minimal') {
     const attachments = metadata.attachmentCount ? `[${metadata.attachmentCount} attachment(s)]` : '';
+    const authorName = String(metadata.authorName || '')
+      .replace(/[\r\n\]]/g, ' ')
+      .replace(/\s+/g, '_')
+      .slice(0, 80);
     return [
-      `[${source}; channel=${metadata.channelId}; message=${metadata.messageId}; reply=required]`,
+      `[${source}; channel=${metadata.channelId}; message=${metadata.messageId}; author=${metadata.authorId}; author_name=${authorName}; reply=required]`,
       metadata.content || '(attachments only)',
       attachments,
     ].filter(Boolean).join('\n');
@@ -1059,7 +1063,7 @@ async function injectDiscordMessageIntoCodexTty(prompt, metadata) {
 }
 
 function decodeSubmitSequence(value) {
-  const normalized = String(value || 'lf').toLowerCase();
+  const normalized = String(value || 'cr').toLowerCase();
   if (normalized === 'none' || normalized === 'off' || normalized === 'false') return '';
   if (normalized === 'cr') return '\r';
   if (normalized === 'lf') return '\n';
