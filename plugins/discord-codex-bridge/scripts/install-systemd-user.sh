@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BIN_DIR="${DISCORD_BRIDGE_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}"
 
 INSTANCE="${DISCORD_BRIDGE_INSTANCE:-${DISCORD_INSTANCE:-}}"
 while [[ $# -gt 0 ]]; do
@@ -12,15 +13,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     --help|-h)
       cat <<'EOF'
-Usage: install-systemd-user.sh [--instance NAME]
+Usage: install-systemd-user.sh [--instance INSTANCE_VALUE]
 
 Without an instance name, installs the legacy single service:
   discord-codex-bridge.service
 
 With an instance name, installs isolated config and service:
-  ~/.codex/channels/discord/NAME/.env
-  ~/.config/discord-codex-bridge/NAME.env
-  discord-codex-bridge@NAME.service
+  $DISCORD_CONFIG_BASE_DIR/$DISCORD_BRIDGE_INSTANCE/.env
+  $XDG_CONFIG_HOME/discord-codex-bridge/$DISCORD_BRIDGE_INSTANCE.env
+  discord-codex-bridge@$DISCORD_BRIDGE_INSTANCE.service
 EOF
       exit 0
       ;;
@@ -50,6 +51,7 @@ ENV_FILE="${DISCORD_ENV_FILE:-$CONFIG_DIR/.env}"
 SERVICE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE_NAME"
 
 mkdir -p "$CONFIG_DIR" "$(dirname "$SERVICE_ENV")" "$(dirname "$SERVICE_FILE")"
+mkdir -p "$BIN_DIR"
 chmod 700 "$CONFIG_DIR"
 
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -88,7 +90,12 @@ EOF
 
 systemctl --user daemon-reload
 systemctl --user enable "$SERVICE_NAME"
+ln -sfn "$ROOT_DIR/bin/discord-codex-bridge" "$BIN_DIR/discord-codex-bridge"
 
 echo "Installed $SERVICE_FILE"
+echo "Installed CLI symlink $BIN_DIR/discord-codex-bridge"
 echo "Edit $ENV_FILE, then run:"
-echo "  systemctl --user restart $SERVICE_NAME"
+echo "  discord-codex-bridge restart${INSTANCE:+ --instance $INSTANCE}"
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+  echo "Add $BIN_DIR to PATH, or set DISCORD_BRIDGE_BIN_DIR to a directory already in PATH."
+fi

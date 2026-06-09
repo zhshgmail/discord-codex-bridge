@@ -5,9 +5,10 @@ description: Configure the Discord Codex bridge token, proxy, TLS, Codex target 
 
 # Discord Configure
 
-Configure the bridge through `~/.codex/channels/discord/.env` by default.
-For multiple bots/sessions, prefer `DISCORD_BRIDGE_INSTANCE=NAME`, which uses
-`~/.codex/channels/discord/NAME/.env`. `DISCORD_CONFIG_DIR` or
+Configure the bridge through `$DISCORD_CONFIG_BASE_DIR/.env` by default,
+falling back to `$HOME/.codex/channels/discord/.env`.
+For multiple bots/sessions, set `DISCORD_BRIDGE_INSTANCE`, which uses
+`$DISCORD_CONFIG_BASE_DIR/$DISCORD_BRIDGE_INSTANCE/.env`. `DISCORD_CONFIG_DIR` or
 `DISCORD_ENV_FILE` may override the location.
 
 ## No token provided
@@ -15,7 +16,7 @@ For multiple bots/sessions, prefer `DISCORD_BRIDGE_INSTANCE=NAME`, which uses
 Show status without revealing secrets:
 
 1. Resolve config dir:
-   `DISCORD_CONFIG_DIR || DISCORD_STATE_DIR || ~/.codex/channels/discord[/INSTANCE]`.
+   `DISCORD_CONFIG_DIR || DISCORD_STATE_DIR || $DISCORD_CONFIG_BASE_DIR/$DISCORD_BRIDGE_INSTANCE || $HOME/.codex/channels/discord/$DISCORD_BRIDGE_INSTANCE`.
 2. Read `.env` if present.
 3. Report whether `DISCORD_BOT_TOKEN` is set; if set, show only the first 6
    characters plus `...`.
@@ -45,7 +46,11 @@ If the user asks to set proxy/TLS/mode, write or update only the named keys.
 Common keys:
 
 - `DISCORD_BRIDGE_INSTANCE`
+- `DISCORD_CONFIG_BASE_DIR`
 - `DISCORD_CONFIG_DIR`
+- `DISCORD_ENV_FILE`
+- `DISCORD_BRIDGE_BIN_DIR`
+- `DISCORD_BRIDGE_SOCKET_DIR`
 - `DISCORD_PROXY_URL`
 - `DISCORD_INSECURE_TLS`
 - `CODEX_TARGET_MODE`
@@ -60,20 +65,20 @@ Common keys:
 Implementation rules:
 
 - Prefer `scripts/manage-access.js configure --token TOKEN` for tokens.
-- For other keys, `mkdir -p ~/.codex/channels/discord`.
+- For other keys, create `$DISCORD_CONFIG_DIR` or `$DISCORD_CONFIG_BASE_DIR/$DISCORD_BRIDGE_INSTANCE`.
 - Preserve existing `.env` keys not being changed.
 - Write with mode `0600`.
 - Never echo the full token.
 - After changing `.env`, remind that the systemd service reads it at startup:
 
 ```bash
-systemctl --user restart discord-codex-bridge.service
+discord-codex-bridge restart
 ```
 
 For named instances, use:
 
 ```bash
-systemctl --user restart discord-codex-bridge@NAME.service
+discord-codex-bridge restart --instance "$DISCORD_BRIDGE_INSTANCE"
 ```
 
 ## Bot setup reminders

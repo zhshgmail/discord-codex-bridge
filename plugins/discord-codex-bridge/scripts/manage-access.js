@@ -3,7 +3,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { resolveDiscordPaths } = require('../src/config-paths');
+const { loadEnvFile: loadBridgeEnvFile, resolveDiscordPaths } = require('../src/config-paths');
 const {
   DM_POLICIES,
   loadState,
@@ -101,7 +101,7 @@ function parseArgs(argv) {
   }
 
   let discordPaths = resolveDiscordPaths(process.env);
-  loadEnvFile(discordPaths.bridgeEnvFile);
+  loadBridgeEnvFile(discordPaths.bridgeEnvFile);
   const pathEnv = { ...process.env };
   if (flags.configDir) {
     pathEnv.DISCORD_CONFIG_DIR = flags.configDir;

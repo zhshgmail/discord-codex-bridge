@@ -16,10 +16,11 @@ The repository also ships Codex skills for setup and access management:
 
 ## Config Directory
 
-By default, all local config and state lives under the single-instance path:
+By default, all local config and state lives under
+`$DISCORD_CONFIG_BASE_DIR`, falling back to `$HOME/.codex/channels/discord`:
 
 ```text
-~/.codex/channels/discord/
+$DISCORD_CONFIG_BASE_DIR/
 ├── .env
 └── state.json
 ```
@@ -31,8 +32,16 @@ but uses Codex's home directory. Override paths with:
 - `DISCORD_ENV_FILE`
 - `DISCORD_STATE_DIR`
 - `DISCORD_BRIDGE_STATE_DIR`
+- `DISCORD_BRIDGE_BIN_DIR`
+- `DISCORD_BRIDGE_SOCKET_DIR`
 
 Never commit `.env` or `state.json`.
+
+Path-related `.env` keys expand `$HOME` and `${VAR}` references, including
+`DISCORD_CONFIG_BASE_DIR`, `DISCORD_CONFIG_DIR`, `DISCORD_ENV_FILE`,
+`DISCORD_STATE_DIR`, `DISCORD_BRIDGE_BIN_DIR`, `DISCORD_BRIDGE_SOCKET_DIR`,
+`CODEX_APP_SERVER_SOCKET`, and `CODEX_CWD`. Secret and network fields such as
+tokens and proxy URLs are not expanded.
 
 For multiple Discord bots on the same Linux user, set an instance name instead
 of sharing the default directory:
@@ -45,9 +54,9 @@ DISCORD_BRIDGE_INSTANCE=codex02 scripts/install-systemd-user.sh
 That creates isolated paths:
 
 ```text
-~/.codex/channels/discord/codex01/.env
-~/.codex/channels/discord/codex01/state.json
-~/.config/discord-codex-bridge/codex01.env
+$DISCORD_CONFIG_BASE_DIR/codex01/.env
+$DISCORD_CONFIG_BASE_DIR/codex01/state.json
+$XDG_CONFIG_HOME/discord-codex-bridge/codex01.env
 discord-codex-bridge@codex01.service
 ```
 
@@ -55,8 +64,8 @@ Each instance should have its own Discord bot token, access state, target Codex
 thread, and app-server socket. Helper scripts honor the same instance:
 
 ```bash
-DISCORD_BRIDGE_INSTANCE=codex01 node scripts/manage-access.js status
-DISCORD_BRIDGE_INSTANCE=codex02 node scripts/fetch-messages.js --channel CHANNEL_ID
+discord-codex-bridge access --instance codex01 -- status
+discord-codex-bridge fetch-messages --instance codex02 -- --channel CHANNEL_ID
 ```
 
 ## Setup
@@ -82,32 +91,36 @@ npm install
 scripts/install-systemd-user.sh
 ```
 
+The installer creates a `discord-codex-bridge` symlink under
+`$DISCORD_BRIDGE_BIN_DIR`, falling back to `$XDG_BIN_HOME` or
+`$HOME/.local/bin`. Put that directory in `PATH`.
+
 For an isolated named bot:
 
 ```bash
 scripts/install-systemd-user.sh --instance codex01
 ```
 
-Edit `~/.codex/channels/discord/.env`:
+Edit `$DISCORD_ENV_FILE` or the `.env` under `$DISCORD_CONFIG_BASE_DIR`:
 
 ```env
 DISCORD_BOT_TOKEN=<your bot token>
 CODEX_TARGET_MODE=tty
-CODEX_CWD=/path/to/your/project
+CODEX_CWD=$PWD
 ```
 
 Start the service:
 
 ```bash
-systemctl --user restart discord-codex-bridge.service
-systemctl --user status discord-codex-bridge.service --no-pager
+discord-codex-bridge restart
+discord-codex-bridge status
 ```
 
-For a named instance, edit `~/.codex/channels/discord/codex01/.env` and use:
+For a named instance, edit the instance `.env` and use:
 
 ```bash
-systemctl --user restart discord-codex-bridge@codex01.service
-systemctl --user status discord-codex-bridge@codex01.service --no-pager
+discord-codex-bridge restart --instance codex01
+discord-codex-bridge status --instance codex01
 ```
 
 ## Proxy and Corporate TLS
@@ -151,24 +164,24 @@ Access follows the same model as Claude Code's Discord plugin:
 Pairing flow:
 
 ```bash
-node scripts/manage-access.js status
+discord-codex-bridge access -- status
 # unknown DM gets a 6-character pairing code from the bridge
-node scripts/manage-access.js pair ABC123
-node scripts/manage-access.js policy allowlist
+discord-codex-bridge access -- pair ABC123
+discord-codex-bridge access -- policy allowlist
 ```
 
 Manual configuration:
 
 ```bash
-node scripts/manage-access.js configure --token YOUR_DISCORD_BOT_TOKEN
-node scripts/manage-access.js allow USER_ID
-node scripts/manage-access.js remove USER_ID
-node scripts/manage-access.js group add CHANNEL_ID
-node scripts/manage-access.js group add CHANNEL_ID --no-mention --allow USER_ID,OTHER_ID
-node scripts/manage-access.js group allow CHANNEL_ID USER_ID
-node scripts/manage-access.js group mention CHANNEL_ID off
-node scripts/manage-access.js group allow-bots CHANNEL_ID on
-node scripts/manage-access.js group rm CHANNEL_ID
+discord-codex-bridge access -- configure --token YOUR_DISCORD_BOT_TOKEN
+discord-codex-bridge access -- allow USER_ID
+discord-codex-bridge access -- remove USER_ID
+discord-codex-bridge access -- group add CHANNEL_ID
+discord-codex-bridge access -- group add CHANNEL_ID --no-mention --allow USER_ID,OTHER_ID
+discord-codex-bridge access -- group allow CHANNEL_ID USER_ID
+discord-codex-bridge access -- group mention CHANNEL_ID off
+discord-codex-bridge access -- group allow-bots CHANNEL_ID on
+discord-codex-bridge access -- group rm CHANNEL_ID
 ```
 
 The running bridge re-reads `state.json` on every inbound message, so access
@@ -207,29 +220,30 @@ The bundled scripts use the same token, proxy, and TLS settings:
 
 ```bash
 # 1. view channels / channel
-node scripts/list-channels.js --guild GUILD_ID
-node scripts/view-channel.js --channel CHANNEL_ID
+discord-codex-bridge list-channels -- --guild GUILD_ID
+discord-codex-bridge view-channel -- --channel CHANNEL_ID
 
 # 2. retrieve history
-node scripts/fetch-messages.js --channel CHANNEL_ID --limit 50
+discord-codex-bridge fetch-messages -- --channel CHANNEL_ID --limit 50
 
 # 3. read message
-node scripts/read-message.js --channel CHANNEL_ID --message MESSAGE_ID
+discord-codex-bridge read-message -- --channel CHANNEL_ID --message MESSAGE_ID
 
 # 4. send message
-printf '%s' 'reply text' | node scripts/send-message.js --channel CHANNEL_ID
+printf '%s' 'reply text' | discord-codex-bridge send -- --channel CHANNEL_ID
 
 # 5. send message in thread
-printf '%s' 'reply text' | node scripts/send-message.js --thread THREAD_ID
+printf '%s' 'reply text' | discord-codex-bridge send -- --thread THREAD_ID
 
 # 6. send message with attachment
-printf '%s' 'see attached' | node scripts/send-message.js --channel CHANNEL_ID --file /abs/path/file.txt
+ATTACHMENT_PATH=$PWD/file.txt
+printf '%s' 'see attached' | discord-codex-bridge send -- --channel CHANNEL_ID --file "$ATTACHMENT_PATH"
 
 # 7. send TTS message
-printf '%s' 'tts text' | node scripts/send-message.js --channel CHANNEL_ID --tts
+printf '%s' 'tts text' | discord-codex-bridge send -- --channel CHANNEL_ID --tts
 
 # 8. send @everyone
-printf '%s' '@everyone update' | node scripts/send-message.js --channel CHANNEL_ID --allow-everyone
+printf '%s' '@everyone update' | discord-codex-bridge send -- --channel CHANNEL_ID --allow-everyone
 ```
 
 History output is oldest-first and capped at 100 messages per call.
@@ -304,25 +318,35 @@ For a current interactive Codex session without TTY injection, run the TUI and
 the bridge against the same Unix app-server socket:
 
 ```bash
-mkdir -p ~/.codex/app-server-discord/codex01
-codex app-server --listen unix://$HOME/.codex/app-server-discord/codex01/app-server.sock
+DISCORD_BRIDGE_INSTANCE=codex01
+DISCORD_BRIDGE_SOCKET_DIR=${DISCORD_BRIDGE_SOCKET_DIR:-$HOME/.codex/run/discord-codex-bridge}
+CODEX_APP_SERVER_SOCKET=$DISCORD_BRIDGE_SOCKET_DIR/$DISCORD_BRIDGE_INSTANCE/app-server.sock
+discord-codex-bridge app-server --instance "$DISCORD_BRIDGE_INSTANCE" --socket "$CODEX_APP_SERVER_SOCKET"
 ```
 
 In another terminal, connect the Codex TUI to that socket:
 
 ```bash
-codex --remote unix://$HOME/.codex/app-server-discord/codex01/app-server.sock resume THREAD_ID
+codex --remote "unix://$CODEX_APP_SERVER_SOCKET" resume THREAD_ID
 ```
 
 Set the matching instance `.env`:
 
 ```env
+DISCORD_BRIDGE_INSTANCE=codex01
 CODEX_TARGET_MODE=wake
 CODEX_TARGET_THREAD_ID=THREAD_ID
 CODEX_TARGET_THREAD_RESUME=false
-CODEX_APP_SERVER_SOCKET=/home/YOU/.codex/app-server-discord/codex01/app-server.sock
+DISCORD_BRIDGE_SOCKET_DIR=$HOME/.codex/run/discord-codex-bridge
+CODEX_APP_SERVER_SOCKET=$DISCORD_BRIDGE_SOCKET_DIR/$DISCORD_BRIDGE_INSTANCE/app-server.sock
 CODEX_DENY_SERVER_REQUESTS=false
 CODEX_WAKE_ACK_ON_DELIVERY=false
+```
+
+Or use the single-command path:
+
+```bash
+discord-codex-bridge connect --instance codex01 --thread THREAD_ID --cwd "$PWD"
 ```
 
 Use one socket per Discord bridge instance. Sharing a socket across instances
@@ -333,14 +357,13 @@ can mix event subscriptions, approvals, and target thread routing.
 From any Codex session:
 
 ```bash
-cd plugins/discord-codex-bridge
-printf '%s' 'reply text' | node scripts/send-message.js --channel CHANNEL_ID --reply-to MESSAGE_ID
+printf '%s' 'reply text' | discord-codex-bridge send -- --channel CHANNEL_ID --reply-to MESSAGE_ID
 ```
 
 To address another bot or user in a guild channel, ping the target explicitly:
 
 ```bash
-printf '%s' 'question text' | node scripts/send-message.js --channel CHANNEL_ID --mention USER_OR_BOT_ID
+printf '%s' 'question text' | discord-codex-bridge send -- --channel CHANNEL_ID --mention USER_OR_BOT_ID
 ```
 
 `--mention ID` prepends `<@ID>` and permits that user/bot mention through
@@ -354,8 +377,10 @@ must have Discord's Mention Everyone permission in that channel.
 ```bash
 cd plugins/discord-codex-bridge
 npm run check
-python3 /path/to/plugin-creator/scripts/validate_plugin.py .
-python3 /path/to/skill-creator/scripts/quick_validate.py skills/discord-codex-bridge
-python3 /path/to/skill-creator/scripts/quick_validate.py skills/configure
-python3 /path/to/skill-creator/scripts/quick_validate.py skills/access
+PLUGIN_CREATOR_VALIDATE=${PLUGIN_CREATOR_VALIDATE:-$HOME/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py}
+SKILL_QUICK_VALIDATE=${SKILL_QUICK_VALIDATE:-$HOME/.codex/skills/.system/skill-creator/scripts/quick_validate.py}
+python3 "$PLUGIN_CREATOR_VALIDATE" .
+python3 "$SKILL_QUICK_VALIDATE" skills/discord-codex-bridge
+python3 "$SKILL_QUICK_VALIDATE" skills/configure
+python3 "$SKILL_QUICK_VALIDATE" skills/access
 ```

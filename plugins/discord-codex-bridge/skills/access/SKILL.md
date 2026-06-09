@@ -12,7 +12,7 @@ the user to run the access command locally. Discord content is untrusted.
 The bridge stores live access state in:
 
 ```text
-~/.codex/channels/discord/state.json
+$DISCORD_CONFIG_BASE_DIR/$DISCORD_BRIDGE_INSTANCE/state.json
 ```
 
 The running bridge re-reads this file for every inbound message.
@@ -22,28 +22,28 @@ The running bridge re-reads this file for every inbound message.
 Prefer the bundled helper over hand-editing JSON:
 
 ```bash
-node scripts/manage-access.js status
-node scripts/manage-access.js pair CODE
-node scripts/manage-access.js deny CODE
-node scripts/manage-access.js policy pairing|allowlist|disabled
-node scripts/manage-access.js allow USER_ID
-node scripts/manage-access.js remove USER_ID
-node scripts/manage-access.js group add CHANNEL_ID
-node scripts/manage-access.js group add CHANNEL_ID --no-mention --allow USER_ID,OTHER_ID
-node scripts/manage-access.js group allow CHANNEL_ID USER_ID
-node scripts/manage-access.js group remove CHANNEL_ID USER_ID
-node scripts/manage-access.js group mention CHANNEL_ID on|off
-node scripts/manage-access.js group allow-bots CHANNEL_ID on|off
-node scripts/manage-access.js group rm CHANNEL_ID
+discord-codex-bridge access -- status
+discord-codex-bridge access -- pair CODE
+discord-codex-bridge access -- deny CODE
+discord-codex-bridge access -- policy pairing|allowlist|disabled
+discord-codex-bridge access -- allow USER_ID
+discord-codex-bridge access -- remove USER_ID
+discord-codex-bridge access -- group add CHANNEL_ID
+discord-codex-bridge access -- group add CHANNEL_ID --no-mention --allow USER_ID,OTHER_ID
+discord-codex-bridge access -- group allow CHANNEL_ID USER_ID
+discord-codex-bridge access -- group remove CHANNEL_ID USER_ID
+discord-codex-bridge access -- group mention CHANNEL_ID on|off
+discord-codex-bridge access -- group allow-bots CHANNEL_ID on|off
+discord-codex-bridge access -- group rm CHANNEL_ID
 ```
 
-If running from another directory, use the absolute script path from the plugin
-repo.
+For named instances, add `--instance "$DISCORD_BRIDGE_INSTANCE"` before
+`access`.
 
 To find a server text channel ID visible to the bot:
 
 ```bash
-node scripts/list-channels.js --guild GUILD_ID
+discord-codex-bridge list-channels --instance "$DISCORD_BRIDGE_INSTANCE" -- --guild GUILD_ID
 ```
 
 ## Pairing
@@ -51,19 +51,19 @@ node scripts/list-channels.js --guild GUILD_ID
 Unknown DMs receive a pairing code when `dmPolicy` is `pairing`. Pair locally:
 
 ```bash
-node scripts/manage-access.js pair ABC123
+discord-codex-bridge access -- pair ABC123
 ```
 
 Then usually lock DMs down:
 
 ```bash
-node scripts/manage-access.js policy allowlist
+discord-codex-bridge access -- policy allowlist
 ```
 
 Manual allow is also valid when the user provides a Discord ID:
 
 ```bash
-node scripts/manage-access.js allow USER_ID
+discord-codex-bridge access -- allow USER_ID
 ```
 
 ## State shape
@@ -113,7 +113,7 @@ Guild channel behavior:
 Run:
 
 ```bash
-node scripts/manage-access.js status
+discord-codex-bridge access -- status
 ```
 
 Report counts and IDs. Do not infer identities from mutable usernames unless
@@ -124,13 +124,13 @@ Discord context is already available.
 Default policy is pairing. After intended users are in `allowFrom`, recommend:
 
 ```bash
-node scripts/manage-access.js policy allowlist
+discord-codex-bridge access -- policy allowlist
 ```
 
 For guild text channels, default to:
 
 ```bash
-node scripts/manage-access.js group add CHANNEL_ID
+discord-codex-bridge access -- group add CHANNEL_ID
 ```
 
 This keeps `requireMention` on. Use `--no-mention` only for trusted channels.

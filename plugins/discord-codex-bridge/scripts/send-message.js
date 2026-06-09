@@ -3,7 +3,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { resolveDiscordPaths } = require('../src/config-paths');
+const { loadEnvFile: loadBridgeEnvFile, resolveDiscordPaths } = require('../src/config-paths');
 
 function parseBool(value, fallback = false) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -214,9 +214,9 @@ async function createRequestBody({ chunk, args, attachments, isFirstChunk }) {
 
 async function main() {
   let discordPaths = resolveDiscordPaths(process.env);
-  loadEnvFile(discordPaths.bridgeEnvFile);
+  loadBridgeEnvFile(discordPaths.bridgeEnvFile);
   discordPaths = resolveDiscordPaths(process.env);
-  loadEnvFile(discordPaths.envFile);
+  loadBridgeEnvFile(discordPaths.envFile);
   discordPaths = resolveDiscordPaths(process.env);
   const args = parseArgs(process.argv.slice(2));
   if (!args.channel) {

@@ -1,0 +1,288 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${DISCORD_BRIDGE_PLUGIN_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+CODEX_BIN_DEFAULT="${CODEX_BIN:-codex}"
+NODE_BIN="${NODE_BIN:-node}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  discord-codex-bridge install [--instance INSTANCE_VALUE]
+  discord-codex-bridge connect --instance INSTANCE_VALUE --thread THREAD_ID [--socket SOCKET] [--cwd DIR]
+  discord-codex-bridge app-server --instance INSTANCE_VALUE [--socket SOCKET]
+  discord-codex-bridge configure-current --instance INSTANCE_VALUE --thread THREAD_ID [--socket SOCKET] [--cwd DIR]
+  discord-codex-bridge start|stop|restart|status|logs [--instance INSTANCE_VALUE]
+  discord-codex-bridge access [--instance INSTANCE_VALUE] -- <manage-access args>
+  discord-codex-bridge send [--instance INSTANCE_VALUE] -- <send-message args>
+  discord-codex-bridge list-channels [--instance INSTANCE_VALUE] -- <list-channels args>
+  discord-codex-bridge view-channel [--instance INSTANCE_VALUE] -- <view-channel args>
+  discord-codex-bridge fetch-messages [--instance INSTANCE_VALUE] -- <fetch-messages args>
+  discord-codex-bridge read-message [--instance INSTANCE_VALUE] -- <read-message args>
+  discord-codex-bridge path [--instance INSTANCE_VALUE]
+
+Environment-first path overrides:
+  DISCORD_BRIDGE_PLUGIN_DIR   Plugin root containing src/, scripts/, bin/
+  DISCORD_BRIDGE_INSTANCE     Default instance name
+  DISCORD_CONFIG_BASE_DIR     Base directory for per-instance config
+  DISCORD_BRIDGE_BIN_DIR      Directory for PATH symlink during install
+  DISCORD_BRIDGE_SOCKET_DIR   Base directory for app-server sockets
+  CODEX_APP_SERVER_SOCKET     Explicit app-server socket path
+  CODEX_CWD                   Codex working directory
+  CODEX_BIN                   codex executable
+EOF
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+quote_env() {
+  local value="$1"
+  printf "'%s'" "${value//\'/\'\\\'\'}"
+}
+
+instance="${DISCORD_BRIDGE_INSTANCE:-${DISCORD_INSTANCE:-}}"
+socket="${CODEX_APP_SERVER_SOCKET:-}"
+thread_id="${CODEX_TARGET_THREAD_ID:-}"
+cwd="${CODEX_CWD:-$PWD}"
+
+args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --instance)
+      instance="${2:-}"
+      shift 2
+      ;;
+    --socket)
+      socket="${2:-}"
+      shift 2
+      ;;
+    --thread|--thread-id)
+      thread_id="${2:-}"
+      shift 2
+      ;;
+    --cwd)
+      cwd="${2:-}"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      args+=("$@")
+      break
+      ;;
+    *)
+      args+=("$1")
+      shift
+      ;;
+  esac
+done
+
+cmd="${args[0]:-help}"
+if [[ ${#args[@]} -gt 0 ]]; then
+  args=("${args[@]:1}")
+fi
+
+validate_instance() {
+  [[ -n "$instance" ]] || die "--instance INSTANCE_VALUE or DISCORD_BRIDGE_INSTANCE is required"
+  [[ "$instance" =~ ^[A-Za-z0-9_.@-]+$ ]] || die "invalid instance name: $instance"
+}
+
+config_base_dir() {
+  printf '%s\n' "${DISCORD_CONFIG_BASE_DIR:-$HOME/.codex/channels/discord}"
+}
+
+config_dir() {
+  if [[ -n "${DISCORD_CONFIG_DIR:-}" ]]; then
+    printf '%s\n' "$DISCORD_CONFIG_DIR"
+  elif [[ -n "$instance" ]]; then
+    printf '%s/%s\n' "$(config_base_dir)" "$instance"
+  else
+    printf '%s\n' "$(config_base_dir)"
+  fi
+}
+
+env_file() {
+  printf '%s\n' "${DISCORD_ENV_FILE:-$(config_dir)/.env}"
+}
+
+state_dir() {
+  printf '%s\n' "${DISCORD_BRIDGE_STATE_DIR:-${DISCORD_STATE_DIR:-$(config_dir)}}"
+}
+
+service_name() {
+  if [[ -n "$instance" ]]; then
+    printf 'discord-codex-bridge@%s.service\n' "$instance"
+  else
+    printf 'discord-codex-bridge.service\n'
+  fi
+}
+
+socket_path() {
+  if [[ -n "$socket" ]]; then
+    printf '%s\n' "$socket"
+    return
+  fi
+  validate_instance
+  local base="${DISCORD_BRIDGE_SOCKET_DIR:-${XDG_RUNTIME_DIR:-$HOME/.codex/run}/discord-codex-bridge}"
+  printf '%s/%s/app-server.sock\n' "$base" "$instance"
+}
+
+socket_url() {
+  printf 'unix://%s\n' "$(socket_path)"
+}
+
+ensure_env_file() {
+  local file
+  file="$(env_file)"
+  mkdir -p "$(dirname "$file")"
+  chmod 700 "$(dirname "$file")"
+  [[ -f "$file" ]] || install -m 600 /dev/null "$file"
+}
+
+set_env_key() {
+  local key="$1"
+  local value="$2"
+  local file
+  file="$(env_file)"
+  ensure_env_file
+  local tmp
+  tmp="$(mktemp)"
+  if [[ -f "$file" ]]; then
+    grep -v -E "^${key}=" "$file" > "$tmp" || true
+  fi
+  printf '%s=%s\n' "$key" "$(quote_env "$value")" >> "$tmp"
+  install -m 600 "$tmp" "$file"
+  rm -f "$tmp"
+}
+
+configure_current() {
+  validate_instance
+  [[ -n "$thread_id" ]] || die "--thread THREAD_ID or CODEX_TARGET_THREAD_ID is required"
+  local sock
+  sock="$(socket_path)"
+  set_env_key DISCORD_BRIDGE_INSTANCE "$instance"
+  set_env_key CODEX_TARGET_MODE wake
+  set_env_key CODEX_TARGET_THREAD_ID "$thread_id"
+  set_env_key CODEX_TARGET_THREAD_RESUME false
+  set_env_key CODEX_APP_SERVER_SOCKET "$sock"
+  set_env_key CODEX_DENY_SERVER_REQUESTS false
+  set_env_key CODEX_WAKE_ACK_ON_DELIVERY false
+  set_env_key CODEX_CWD "$cwd"
+  printf 'configured %s\n' "$(env_file)"
+}
+
+start_app_server() {
+  validate_instance
+  local sock
+  sock="$(socket_path)"
+  local dir
+  dir="$(dirname "$sock")"
+  mkdir -p "$dir"
+  if [[ -S "$sock" ]]; then
+    printf 'app-server socket already exists: %s\n' "$sock"
+    return
+  fi
+  rm -f "$sock"
+  local log="${DISCORD_BRIDGE_APP_SERVER_LOG:-$dir/app-server.log}"
+  local pid_file="${DISCORD_BRIDGE_APP_SERVER_PID_FILE:-$dir/app-server.pid}"
+  nohup "$CODEX_BIN_DEFAULT" app-server --listen "$(socket_url)" > "$log" 2>&1 &
+  printf '%s\n' "$!" > "$pid_file"
+  for _ in $(seq 1 50); do
+    [[ -S "$sock" ]] && {
+      printf 'app-server socket ready: %s\n' "$sock"
+      return
+    }
+    sleep 0.1
+  done
+  die "app-server socket did not appear: $sock (log: $log)"
+}
+
+install_bridge() {
+  if [[ -n "$instance" ]]; then
+    DISCORD_BRIDGE_INSTANCE="$instance" bash "$ROOT_DIR/scripts/install-systemd-user.sh" --instance "$instance"
+  else
+    bash "$ROOT_DIR/scripts/install-systemd-user.sh"
+  fi
+}
+
+service_action() {
+  local action="$1"
+  local service
+  service="$(service_name)"
+  case "$action" in
+    logs)
+      exec journalctl --user -u "$service" -n "${DISCORD_BRIDGE_LOG_LINES:-100}" --no-pager
+      ;;
+    status)
+      exec systemctl --user status "$service" --no-pager
+      ;;
+    *)
+      systemctl --user "$action" "$service"
+      ;;
+  esac
+}
+
+case "$cmd" in
+  help)
+    usage
+    ;;
+  path)
+    printf 'instance=%s\n' "${instance:-}"
+    printf 'config_dir=%s\n' "$(config_dir)"
+    printf 'env_file=%s\n' "$(env_file)"
+    printf 'state_dir=%s\n' "$(state_dir)"
+    if [[ -n "$instance" || -n "$socket" ]]; then
+      printf 'socket=%s\n' "$(socket_path)"
+      printf 'socket_url=%s\n' "$(socket_url)"
+    fi
+    printf 'service=%s\n' "$(service_name)"
+    ;;
+  install)
+    install_bridge
+    ;;
+  app-server)
+    start_app_server
+    ;;
+  configure-current)
+    configure_current
+    ;;
+  connect)
+    validate_instance
+    [[ -n "$thread_id" ]] || die "--thread THREAD_ID or CODEX_TARGET_THREAD_ID is required"
+    start_app_server
+    configure_current
+    systemctl --user restart "$(service_name)"
+    exec "$CODEX_BIN_DEFAULT" --remote "$(socket_url)" resume "$thread_id"
+    ;;
+  start|stop|restart|status|logs)
+    service_action "$cmd"
+    ;;
+  access)
+    DISCORD_BRIDGE_INSTANCE="$instance" exec "$NODE_BIN" "$ROOT_DIR/scripts/manage-access.js" "${args[@]}"
+    ;;
+  send)
+    DISCORD_BRIDGE_INSTANCE="$instance" exec "$NODE_BIN" "$ROOT_DIR/scripts/send-message.js" "${args[@]}"
+    ;;
+  list-channels)
+    DISCORD_BRIDGE_INSTANCE="$instance" exec "$NODE_BIN" "$ROOT_DIR/scripts/list-channels.js" "${args[@]}"
+    ;;
+  view-channel)
+    DISCORD_BRIDGE_INSTANCE="$instance" exec "$NODE_BIN" "$ROOT_DIR/scripts/view-channel.js" "${args[@]}"
+    ;;
+  fetch-messages)
+    DISCORD_BRIDGE_INSTANCE="$instance" exec "$NODE_BIN" "$ROOT_DIR/scripts/fetch-messages.js" "${args[@]}"
+    ;;
+  read-message)
+    DISCORD_BRIDGE_INSTANCE="$instance" exec "$NODE_BIN" "$ROOT_DIR/scripts/read-message.js" "${args[@]}"
+    ;;
+  *)
+    usage >&2
+    die "unknown command: $cmd"
+    ;;
+esac

@@ -16,9 +16,12 @@
     "skill"
   ],
   "main": "src/index.js",
+  "bin": {
+    "discord-codex-bridge": "bin/discord-codex-bridge"
+  },
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/access-state.js && node --check src/config-paths.js && node --check scripts/manage-access.js && node --check scripts/send-message.js && node --check scripts/fetch-messages.js && node --check scripts/view-channel.js && node --check scripts/list-channels.js && node --check scripts/read-message.js"
+    "check": "bash -n bin/discord-codex-bridge && node --check src/index.js && node --check src/access-state.js && node --check src/config-paths.js && node --check scripts/manage-access.js && node --check scripts/send-message.js && node --check scripts/fetch-messages.js && node --check scripts/view-channel.js && node --check scripts/list-channels.js && node --check scripts/read-message.js"
   },
   "dependencies": {
     "discord.js": "^14.19.3",

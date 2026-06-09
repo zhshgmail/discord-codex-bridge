@@ -7,7 +7,7 @@ const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const readline = require('node:readline');
-const { resolveDiscordPaths } = require('./config-paths');
+const { loadEnvFile: loadBridgeEnvFile, resolveDiscordPaths } = require('./config-paths');
 const {
   loadState,
   saveState,
@@ -53,9 +53,9 @@ function loadEnvFile(file) {
 }
 
 let discordPaths = resolveDiscordPaths(process.env);
-loadEnvFile(discordPaths.bridgeEnvFile);
+loadBridgeEnvFile(discordPaths.bridgeEnvFile);
 discordPaths = resolveDiscordPaths(process.env);
-loadEnvFile(discordPaths.envFile);
+loadBridgeEnvFile(discordPaths.envFile);
 discordPaths = resolveDiscordPaths(process.env);
 
 if (parseBool(process.env.DISCORD_INSECURE_TLS, false)) {
