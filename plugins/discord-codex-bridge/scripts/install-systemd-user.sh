@@ -60,6 +60,13 @@ fi
 ENV_FILE="${DISCORD_ENV_FILE:-$CONFIG_DIR/.env}"
 SERVICE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE_NAME"
 
+append_env_if_set() {
+  local key="$1"
+  local value="${!key:-}"
+  [[ -n "$value" ]] || return 0
+  printf '%s=%s\n' "$key" "$value" >> "$SERVICE_ENV"
+}
+
 if [[ "$DRY_RUN" == "true" ]]; then
   cat <<EOF
 [dry-run] Would install Discord Codex Bridge
@@ -99,6 +106,11 @@ PATH=$PATH
 NO_PROXY=localhost,127.0.0.1,::1,0.0.0.0
 no_proxy=localhost,127.0.0.1,::1,0.0.0.0
 EOF
+append_env_if_set DISCORD_PROXY_URL
+append_env_if_set HTTPS_PROXY
+append_env_if_set HTTP_PROXY
+append_env_if_set https_proxy
+append_env_if_set http_proxy
 chmod 600 "$SERVICE_ENV"
 
 cat > "$SERVICE_FILE" <<EOF

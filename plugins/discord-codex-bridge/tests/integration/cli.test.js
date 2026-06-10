@@ -89,6 +89,24 @@ test('install --dry-run previews files without writing service files', () => {
   );
 });
 
+test('install preserves proxy environment for the user service', () => {
+  const { tmp, env } = makeHarness();
+  const result = runCli(['install', '--instance', 'codex01'], {
+    ...env,
+    HTTPS_PROXY: 'http://proxy.example.test:8080',
+    HTTP_PROXY: 'http://proxy.example.test:8080',
+    https_proxy: 'http://lower-proxy.example.test:8080',
+    http_proxy: 'http://lower-proxy.example.test:8080',
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const serviceEnv = fs.readFileSync(path.join(tmp, '.config', 'discord-codex-bridge', 'codex01.env'), 'utf8');
+  assert.match(serviceEnv, /^HTTPS_PROXY=http:\/\/proxy\.example\.test:8080$/m);
+  assert.match(serviceEnv, /^HTTP_PROXY=http:\/\/proxy\.example\.test:8080$/m);
+  assert.match(serviceEnv, /^https_proxy=http:\/\/lower-proxy\.example\.test:8080$/m);
+  assert.match(serviceEnv, /^http_proxy=http:\/\/lower-proxy\.example\.test:8080$/m);
+});
+
 test('upgrade --dry-run previews check, install, and restart steps', () => {
   const { env } = makeHarness();
   const result = runCli(['upgrade', '--instance', 'codex01', '--dry-run'], env);
