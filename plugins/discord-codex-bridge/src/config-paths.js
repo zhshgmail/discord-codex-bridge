@@ -57,6 +57,10 @@ function envValue(env, key) {
   return EXPAND_ENV_KEYS.has(key) ? expandEnvReferences(value, env) : value;
 }
 
+function xdgConfigHome(env = process.env) {
+  return envValue(env, 'XDG_CONFIG_HOME') || path.join(os.homedir(), '.config');
+}
+
 function loadEnvFile(file, env = process.env) {
   if (!file) return;
   const fs = require('node:fs');
@@ -83,10 +87,11 @@ function resolveDiscordPaths(env = process.env) {
   const configDir = envValue(env, 'DISCORD_CONFIG_DIR') || envValue(env, 'DISCORD_STATE_DIR') || defaultConfigDir;
   const envFile = envValue(env, 'DISCORD_ENV_FILE') || path.join(configDir, '.env');
   const stateDir = envValue(env, 'DISCORD_BRIDGE_STATE_DIR') || envValue(env, 'DISCORD_STATE_DIR') || configDir;
+  const defaultBridgeEnvFile = instance
+    ? path.join(xdgConfigHome(env), 'discord-codex-bridge', `${instance}.env`)
+    : path.join(xdgConfigHome(env), 'discord-codex-bridge.env');
   const bridgeEnvFile = envValue(env, 'DISCORD_BRIDGE_ENV_FILE') || (
-    instance
-      ? path.join(DEFAULT_INSTANCE_BRIDGE_ENV_DIR, `${instance}.env`)
-      : DEFAULT_SINGLE_BRIDGE_ENV_FILE
+    defaultBridgeEnvFile
   );
 
   return {
@@ -98,7 +103,7 @@ function resolveDiscordPaths(env = process.env) {
     bridgeEnvFile,
     defaultConfigDir,
     defaultEnvFile: path.join(defaultConfigDir, '.env'),
-    defaultBridgeEnvFile: bridgeEnvFile,
+    defaultBridgeEnvFile,
   };
 }
 
@@ -110,4 +115,5 @@ module.exports = {
   loadEnvFile,
   normalizeInstanceName,
   resolveDiscordPaths,
+  xdgConfigHome,
 };

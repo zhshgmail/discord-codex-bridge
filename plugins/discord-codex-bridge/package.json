@@ -21,12 +21,17 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "check": "bash -n bin/discord-codex-bridge && node --check src/index.js && node --check src/access-state.js && node --check src/config-paths.js && node --check scripts/manage-access.js && node --check scripts/send-message.js && node --check scripts/fetch-messages.js && node --check scripts/view-channel.js && node --check scripts/list-channels.js && node --check scripts/read-message.js"
+    "syntax": "bash -n bin/discord-codex-bridge && bash -n scripts/install-systemd-user.sh && node --check src/index.js && node --check src/access-state.js && node --check src/config-paths.js && node --check scripts/manage-access.js && node --check scripts/send-message.js && node --check scripts/fetch-messages.js && node --check scripts/view-channel.js && node --check scripts/list-channels.js && node --check scripts/read-message.js",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "node --test tests/unit/*.test.js",
+    "test:integration": "node --test tests/integration/*.test.js",
+    "check": "npm run syntax && npm test"
   },
   "dependencies": {
     "discord.js": "^14.19.3",
     "proxy-agent": "^6.5.0",
-    "undici": "^7.10.0"
+    "undici": "^7.10.0",
+    "ws": "^8.21.0"
   },
   "engines": {
     "node": ">=22"

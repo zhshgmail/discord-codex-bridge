@@ -14,6 +14,7 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       cat <<'EOF'
 Usage: install-systemd-user.sh [--instance INSTANCE_VALUE]
+       install-systemd-user.sh [--instance INSTANCE_VALUE] --dry-run
 
 Without an instance name, installs the legacy single service:
   discord-codex-bridge.service
@@ -22,8 +23,15 @@ With an instance name, installs isolated config and service:
   $DISCORD_CONFIG_BASE_DIR/$DISCORD_BRIDGE_INSTANCE/.env
   $XDG_CONFIG_HOME/discord-codex-bridge/$DISCORD_BRIDGE_INSTANCE.env
   discord-codex-bridge@$DISCORD_BRIDGE_INSTANCE.service
+
+Options:
+  --dry-run   Print resolved paths and commands without writing files.
 EOF
       exit 0
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
       ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -31,6 +39,8 @@ EOF
       ;;
   esac
 done
+
+DRY_RUN="${DRY_RUN:-false}"
 
 if [[ -n "$INSTANCE" && ! "$INSTANCE" =~ ^[A-Za-z0-9_.@-]+$ ]]; then
   echo "Instance name must use only letters, numbers, dot, underscore, dash, or @: $INSTANCE" >&2
@@ -49,6 +59,26 @@ else
 fi
 ENV_FILE="${DISCORD_ENV_FILE:-$CONFIG_DIR/.env}"
 SERVICE_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE_NAME"
+
+if [[ "$DRY_RUN" == "true" ]]; then
+  cat <<EOF
+[dry-run] Would install Discord Codex Bridge
+plugin_dir=$ROOT_DIR
+instance=$INSTANCE
+config_dir=$CONFIG_DIR
+env_file=$ENV_FILE
+service_env=$SERVICE_ENV
+service_file=$SERVICE_FILE
+service_name=$SERVICE_NAME
+bin_link=$BIN_DIR/discord-codex-bridge
+commands:
+  mkdir -p "$CONFIG_DIR" "$(dirname "$SERVICE_ENV")" "$(dirname "$SERVICE_FILE")" "$BIN_DIR"
+  cp "$ROOT_DIR/config/.env.example" "$ENV_FILE"  # only if missing
+  systemctl --user daemon-reload
+  systemctl --user enable "$SERVICE_NAME"
+EOF
+  exit 0
+fi
 
 mkdir -p "$CONFIG_DIR" "$(dirname "$SERVICE_ENV")" "$(dirname "$SERVICE_FILE")"
 mkdir -p "$BIN_DIR"

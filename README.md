@@ -88,7 +88,8 @@ Install and create the local config template:
 ```bash
 cd plugins/discord-codex-bridge
 npm install
-scripts/install-systemd-user.sh
+./bin/discord-codex-bridge install --dry-run
+./bin/discord-codex-bridge install
 ```
 
 The installer creates a `discord-codex-bridge` symlink under
@@ -98,7 +99,8 @@ The installer creates a `discord-codex-bridge` symlink under
 For an isolated named bot:
 
 ```bash
-scripts/install-systemd-user.sh --instance codex01
+discord-codex-bridge install --instance codex01 --dry-run
+discord-codex-bridge install --instance codex01
 ```
 
 Edit `$DISCORD_ENV_FILE` or the `.env` under `$DISCORD_CONFIG_BASE_DIR`:
@@ -122,6 +124,39 @@ For a named instance, edit the instance `.env` and use:
 discord-codex-bridge restart --instance codex01
 discord-codex-bridge status --instance codex01
 ```
+
+Upgrade an existing checkout after pulling new code:
+
+```bash
+git pull --ff-only
+cd plugins/discord-codex-bridge
+npm install
+discord-codex-bridge upgrade --instance codex01 --dry-run
+discord-codex-bridge upgrade --instance codex01
+```
+
+`upgrade` runs `npm run check`, refreshes the user systemd unit and PATH
+symlink, then restarts the selected bridge instance. Use `--skip-check` only
+when another release gate already ran in the same checkout. Use `--no-restart`
+to stage files without touching the running bot.
+
+For long-running engineering tasks over Discord, set a larger turn timeout in
+the instance `.env` before restarting the bridge:
+
+```env
+CODEX_TURN_TIMEOUT_MS=1800000
+```
+
+One-command current-session setup:
+
+```bash
+discord-codex-bridge connect --instance codex01 --thread THREAD_ID --cwd "$PWD"
+```
+
+`connect` starts the shared app-server socket if needed, writes the selected
+thread/socket/current working directory into the instance `.env`, installs the
+user service if it is missing, restarts the bridge, and then resumes the
+interactive session through the same socket.
 
 ## Proxy and Corporate TLS
 
@@ -314,6 +349,11 @@ Other modes:
   starting the turn so the interactive TUI remains the primary event consumer.
 - `inject`: append a raw user item to the target thread.
 
+Use `CODEX_TURN_TIMEOUT_MS` to control how long the bridge waits for an
+app-server turn before posting an error back to Discord. The example config
+uses 30 minutes because install, test, commit, and push tasks often exceed the
+shorter interactive default.
+
 For a current interactive Codex session without TTY injection, run the TUI and
 the bridge against the same Unix app-server socket:
 
@@ -376,6 +416,7 @@ must have Discord's Mention Everyone permission in that channel.
 
 ```bash
 cd plugins/discord-codex-bridge
+npm test
 npm run check
 PLUGIN_CREATOR_VALIDATE=${PLUGIN_CREATOR_VALIDATE:-$HOME/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py}
 SKILL_QUICK_VALIDATE=${SKILL_QUICK_VALIDATE:-$HOME/.codex/skills/.system/skill-creator/scripts/quick_validate.py}
@@ -384,3 +425,22 @@ python3 "$SKILL_QUICK_VALIDATE" skills/discord-codex-bridge
 python3 "$SKILL_QUICK_VALIDATE" skills/configure
 python3 "$SKILL_QUICK_VALIDATE" skills/access
 ```
+
+The default test suite is offline and token-free:
+
+- `npm run test:unit` covers config path expansion and access-state
+  normalization.
+- `npm run test:integration` covers CLI path resolution, install dry-runs,
+  upgrade dry-runs, and current-thread configuration.
+- `npm run check` runs shell/Node syntax checks plus both test suites.
+
+Before publishing a release candidate, also run a live instance gate:
+
+```bash
+discord-codex-bridge doctor --instance codex01
+discord-codex-bridge doctor --instance codex01 --channel CHANNEL_ID
+```
+
+Then verify one real DM or guild mention enters the intended thread, receives a
+reply, and a second queued message starts after the first answer without
+waiting for `CODEX_TURN_TIMEOUT_MS`.

@@ -81,6 +81,17 @@ For named instances, use:
 discord-codex-bridge restart --instance "$DISCORD_BRIDGE_INSTANCE"
 ```
 
+For current-session app-server mode, prefer the wrapper instead of hand-editing
+socket paths:
+
+```bash
+discord-codex-bridge connect --instance "$DISCORD_BRIDGE_INSTANCE" --thread THREAD_ID --cwd "$PWD"
+```
+
+This writes the instance `.env`, starts the app-server socket if needed,
+installs the user service if it is missing, restarts the bridge, and resumes
+the selected thread through the same socket.
+
 ## Bot setup reminders
 
 Discord Developer Portal requirements:

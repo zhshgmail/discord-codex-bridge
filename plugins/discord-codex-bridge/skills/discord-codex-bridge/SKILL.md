@@ -8,6 +8,47 @@ description: Use when the user wants Discord messages to reach Codex, asks to de
 Use this skill for a local Discord bot bridge that forwards accepted Discord
 DMs or enabled guild text channels into Codex.
 
+## Fast Path
+
+For a user-facing setup or restart, prefer the installed CLI. Do not make the
+user stitch together helper scripts by hand.
+
+```bash
+discord-codex-bridge doctor --instance codex01
+discord-codex-bridge connect --instance codex01 --thread THREAD_ID --cwd "$PWD"
+discord-codex-bridge upgrade --instance codex01 --dry-run
+```
+
+For current-session operation, the recommended path is app-server socket mode:
+
+1. Run `discord-codex-bridge connect --instance NAME --thread THREAD_ID --cwd "$PWD"`.
+2. Ensure the instance `.env` has `CODEX_TARGET_MODE=turn`,
+   `CODEX_TARGET_THREAD_RESUME=true`, and `CODEX_APP_SERVER_SOCKET=...`.
+3. Start Codex through the printed `--remote unix://...` socket, using
+   `--dangerously-bypass-approvals-and-sandbox` only when the user explicitly
+   accepts unattended remote operation.
+4. Verify with `discord-codex-bridge doctor --instance NAME --channel CHANNEL_ID`
+   and one real Discord DM or guild mention.
+
+## Release Gate
+
+Do not call a bridge/plugin release ready until these pass on a clean or
+freshly installed instance:
+
+```bash
+npm install
+npm test
+npm run check
+discord-codex-bridge install --instance testbot --dry-run
+discord-codex-bridge install --instance testbot
+discord-codex-bridge doctor --instance testbot
+discord-codex-bridge doctor --instance testbot --channel CHANNEL_ID
+```
+
+Then verify one real Discord message enters the intended Codex thread, the
+final answer posts back to Discord, and a second queued message is released
+without waiting for the first turn timeout.
+
 ## Config layout
 
 Default single-instance config/state directory is `$DISCORD_CONFIG_BASE_DIR`,
@@ -94,7 +135,8 @@ From the plugin repository:
 ```bash
 npm install
 npm run check
-scripts/install-systemd-user.sh
+discord-codex-bridge install --dry-run
+discord-codex-bridge install
 ```
 
 The installer links `discord-codex-bridge` into
@@ -109,7 +151,8 @@ discord-codex-bridge logs --instance codex01
 For a named isolated instance:
 
 ```bash
-scripts/install-systemd-user.sh --instance codex01
+discord-codex-bridge install --instance codex01 --dry-run
+discord-codex-bridge install --instance codex01
 discord-codex-bridge restart --instance codex01
 ```
 
@@ -121,13 +164,30 @@ discord-codex-bridge restart
 discord-codex-bridge status
 ```
 
+To update an existing checkout:
+
+```bash
+git pull --ff-only
+cd plugins/discord-codex-bridge
+npm install
+discord-codex-bridge upgrade --instance codex01 --dry-run
+discord-codex-bridge upgrade --instance codex01
+```
+
+`upgrade` runs the release checks, reinstalls the PATH symlink and user systemd
+unit, then restarts the selected instance. Use `--no-restart` only when the
+user explicitly wants to stage the update without touching the live bot.
+
 ## Modes
 
 - `CODEX_TARGET_MODE=tty`: inject into an already-running interactive
   `codex resume` TTY. This can reach an already-open TUI, but it cannot protect
   local half-typed input from being submitted with Discord text.
 - `CODEX_TARGET_MODE=turn`: start or resume a Codex app-server thread and post
-  the final answer back to Discord.
+  the final answer back to Discord. When `CODEX_APP_SERVER_SOCKET` is set, the
+  bridge connects directly to the same Unix WebSocket `/rpc` endpoint used by
+  `codex --remote`; this is the preferred current-TUI bridge path because it
+  avoids TTY input-buffer corruption and does not patch Codex.
 - `CODEX_TARGET_MODE=wake`: start an app-server turn in the target thread and,
   by default, avoid noisy delivery acknowledgements. The bridge unsubscribes
   from the target thread after starting the turn so the TUI remains primary.
@@ -143,14 +203,36 @@ Set that instance `.env`:
 
 ```env
 DISCORD_BRIDGE_INSTANCE=codex01
-CODEX_TARGET_MODE=wake
+CODEX_TARGET_MODE=turn
 CODEX_TARGET_THREAD_ID=THREAD_ID
-CODEX_TARGET_THREAD_RESUME=false
+CODEX_TARGET_THREAD_RESUME=true
 DISCORD_BRIDGE_SOCKET_DIR=$HOME/.codex/run/discord-codex-bridge
 CODEX_APP_SERVER_SOCKET=$DISCORD_BRIDGE_SOCKET_DIR/$DISCORD_BRIDGE_INSTANCE/app-server.sock
 CODEX_DENY_SERVER_REQUESTS=false
+CODEX_TURN_TIMEOUT_MS=1800000
+CODEX_TURN_POLL_MS=1000
+CODEX_THREAD_IDLE_POLL_MS=500
+CODEX_THREAD_IDLE_TIMEOUT_MS=60000
+CODEX_THREAD_FINAL_ANSWER_IDLE_GRACE_MS=2000
 CODEX_WAKE_ACK_ON_DELIVERY=false
 ```
+
+The socket transport is a WebSocket app-server client, not `codex app-server
+proxy --sock`. The WebSocket handshake path is `/rpc`; Node clients must disable
+per-message deflate. Keep `CODEX_TARGET_THREAD_RESUME=true` for this mode: the
+bridge calls `thread/resume` with `excludeTurns:true` so it subscribes to the
+target thread and can observe turn events without loading full history. The
+bridge also treats a completed `final_answer` agent message as sufficient to
+release the Discord queue, and `CODEX_TURN_POLL_MS` enables `thread/read`
+polling as a fallback when app-server does not broadcast `turn/completed`.
+Before starting the next Discord turn, the bridge reads the target thread and
+waits until the latest turn is no longer `inProgress`; if a stale in-progress
+turn already has a final answer, it waits `CODEX_THREAD_FINAL_ANSWER_IDLE_GRACE_MS`
+before treating the thread as idle. This prevents queued Discord messages from
+starting while the TUI or a local console turn is still finishing.
+For remote engineering tasks, keep `CODEX_TURN_TIMEOUT_MS` high enough for
+install/test/commit/push workflows; 30 minutes is the recommended default for
+unattended Discord control.
 
 For `tty`, use `CODEX_TTY_PROMPT_FORMAT=minimal` by default. It injects a short
 source marker with channel/message IDs, Discord author ID/name, and
@@ -180,6 +262,12 @@ Check service logs:
 
 ```bash
 discord-codex-bridge logs --instance "$DISCORD_BRIDGE_INSTANCE"
+```
+
+Run a one-command local health check:
+
+```bash
+discord-codex-bridge doctor --instance "$DISCORD_BRIDGE_INSTANCE" --channel CHANNEL_ID
 ```
 
 Check access state:

@@ -131,6 +131,10 @@ const config = {
   maxDiscordChunk: Number(process.env.DISCORD_MAX_CHARS || 1900),
   typingIntervalMs: Number(process.env.DISCORD_TYPING_INTERVAL_MS || 8000),
   codexTurnTimeoutMs: Number(process.env.CODEX_TURN_TIMEOUT_MS || 5 * 60 * 1000),
+  codexTurnPollMs: Number(process.env.CODEX_TURN_POLL_MS || 1000),
+  codexThreadIdlePollMs: Number(process.env.CODEX_THREAD_IDLE_POLL_MS || 500),
+  codexThreadIdleTimeoutMs: Number(process.env.CODEX_THREAD_IDLE_TIMEOUT_MS || 60 * 1000),
+  codexThreadFinalAnswerIdleGraceMs: Number(process.env.CODEX_THREAD_FINAL_ANSWER_IDLE_GRACE_MS || 2000),
 };
 
 if (!config.token) {
@@ -221,6 +225,8 @@ class CodexAppServer extends EventEmitter {
   constructor() {
     super();
     this.proc = null;
+    this.ws = null;
+    this.transport = null;
     this.nextId = 1;
     this.pending = new Map();
     this.started = false;
@@ -239,6 +245,11 @@ class CodexAppServer extends EventEmitter {
   }
 
   async start() {
+    if (config.codexAppServerSocket) {
+      await this.startWebSocket();
+      return;
+    }
+
     const env = { ...process.env };
     env.NO_PROXY = mergeNoProxy(env.NO_PROXY || env.no_proxy || '');
     env.no_proxy = env.NO_PROXY;
@@ -254,21 +265,19 @@ class CodexAppServer extends EventEmitter {
       env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
     }
 
-    const args = config.codexAppServerSocket
-      ? ['app-server', 'proxy', '--sock', config.codexAppServerSocket]
-      : ['app-server', '--listen', 'stdio://'];
-    const transport = config.codexAppServerSocket
-      ? `unix://${config.codexAppServerSocket}`
-      : 'stdio://private';
-
+    const args = ['app-server', '--listen', 'stdio://'];
+    const transport = 'stdio://private';
     this.proc = spawn(config.codexBin, args, {
       cwd: config.codexCwd,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    this.transport = 'stdio';
 
     this.proc.once('exit', (code, signal) => {
       this.started = false;
+      this.proc = null;
+      this.transport = null;
       const error = new Error(`codex app-server transport exited code=${code} signal=${signal}`);
       for (const { reject } of this.pending.values()) reject(error);
       this.pending.clear();
@@ -285,6 +294,66 @@ class CodexAppServer extends EventEmitter {
       if (text) log('CODEX', truncate(text, 1200));
     });
 
+    await this.initialize(transport);
+  }
+
+  async startWebSocket() {
+    const WebSocket = require('ws');
+    const socket = config.codexAppServerSocket;
+    if (!fs.existsSync(socket)) {
+      throw new Error(`Configured CODEX_APP_SERVER_SOCKET does not exist: ${socket}`);
+    }
+
+    const url = `ws+unix://${socket}:/rpc`;
+    const ws = new WebSocket(url, {
+      handshakeTimeout: 10000,
+      perMessageDeflate: false,
+    });
+    this.ws = ws;
+    this.transport = 'websocket';
+
+    await new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`timed out connecting to Codex app-server socket: ${socket}`));
+        ws.terminate();
+      }, 12000);
+      ws.once('open', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      });
+      ws.once('error', error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+
+    ws.on('message', data => {
+      this.handleMessageText(Buffer.isBuffer(data) ? data.toString('utf8') : String(data));
+    });
+    ws.once('close', (code, reason) => {
+      this.started = false;
+      this.ws = null;
+      this.transport = null;
+      const error = new Error(`codex app-server websocket closed code=${code} reason=${reason.toString()}`);
+      for (const { reject } of this.pending.values()) reject(error);
+      this.pending.clear();
+      this.emit('exit', error);
+    });
+    ws.on('error', error => {
+      log('WARN', 'Codex app-server websocket error', { error: String(error) });
+    });
+
+    await this.initialize(`unix://${socket}#/rpc`);
+  }
+
+  async initialize(transport) {
     await this.request('initialize', {
       clientInfo: {
         name: 'discord-codex-bridge',
@@ -312,14 +381,22 @@ class CodexAppServer extends EventEmitter {
 
   handleLine(line) {
     if (!line.trim()) return;
+    this.handleMessageText(line);
+  }
+
+  handleMessageText(text) {
+    if (!text.trim()) return;
     let message;
     try {
-      message = JSON.parse(line);
+      message = JSON.parse(text);
     } catch (error) {
-      log('WARN', 'Non-JSON app-server stdout', { line: truncate(line, 500), error: String(error) });
+      log('WARN', 'Non-JSON app-server message', { line: truncate(text, 500), error: String(error) });
       return;
     }
+    this.handleMessage(message);
+  }
 
+  handleMessage(message) {
     if (Object.prototype.hasOwnProperty.call(message, 'id') && (message.result || message.error)) {
       const pending = this.pending.get(message.id);
       if (!pending) return;
@@ -368,12 +445,10 @@ class CodexAppServer extends EventEmitter {
     } else if (method === 'item/tool/call') {
       this.respond(message.id, { contentItems: [{ type: 'text', text: 'Bridge dynamic tools are not implemented.' }], success: false });
     } else {
-      this.proc.stdin.write(
-        `${JSON.stringify({
-          id: message.id,
-          error: { code: -32601, message: `Bridge does not implement server request ${method}` },
-        })}\n`,
-      );
+      this.sendRaw({
+        id: message.id,
+        error: { code: -32601, message: `Bridge does not implement server request ${method}` },
+      });
     }
   }
 
@@ -386,17 +461,38 @@ class CodexAppServer extends EventEmitter {
         reject(new Error(`app-server request timed out: ${method}`));
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
-      this.proc.stdin.write(`${JSON.stringify(payload)}\n`);
+      try {
+        this.sendRaw(payload);
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+      }
     });
   }
 
   notify(method, params) {
     const payload = params === undefined ? { method } : { method, params };
-    this.proc.stdin.write(`${JSON.stringify(payload)}\n`);
+    this.sendRaw(payload);
   }
 
   respond(id, result) {
-    this.proc.stdin.write(`${JSON.stringify({ id, result })}\n`);
+    this.sendRaw({ id, result });
+  }
+
+  sendRaw(payload) {
+    const text = JSON.stringify(payload);
+    if (this.ws) {
+      if (this.ws.readyState !== this.ws.OPEN) {
+        throw new Error('Codex app-server websocket is not open');
+      }
+      this.ws.send(text);
+      return;
+    }
+    if (!this.proc?.stdin?.writable) {
+      throw new Error('Codex app-server stdio transport is not writable');
+    }
+    this.proc.stdin.write(`${text}\n`);
   }
 }
 
@@ -433,7 +529,11 @@ class CodexConversationManager {
   }
 
   async send(chatId, prompt, metadata) {
-    const queueKey = config.codexTargetMode === 'tty' ? 'tty' : chatId;
+    const queueKey = config.codexTargetMode === 'tty'
+      ? 'tty'
+      : config.codexTargetThreadId
+        ? `target:${config.codexTargetThreadId}`
+        : chatId;
     const previous = this.queues.get(queueKey) || Promise.resolve();
     const current = previous
       .catch(() => {})
@@ -463,6 +563,7 @@ class CodexConversationManager {
       await this.injectMessage(threadId, turnPrompt, metadata);
       return `Injected Discord message ${metadata.messageId} into Codex thread ${threadId}.`;
     }
+    await this.waitForThreadIdle(threadId, metadata.messageId);
     const result = await this.app.request('turn/start', {
       threadId,
       clientUserMessageId: metadata.messageId,
@@ -485,6 +586,14 @@ class CodexConversationManager {
       personality: 'pragmatic',
     });
     const turnId = result.turn.id;
+    log('INFO', 'Started Codex turn from Discord', {
+      threadId,
+      turnId,
+      messageId: metadata.messageId,
+      channelId: metadata.channelId,
+      guildId: metadata.guildId,
+      targetMode: config.codexTargetMode,
+    });
     if (config.codexTargetThreadId && config.codexTargetMode === 'wake') {
       await this.app.request('thread/unsubscribe', { threadId }, 10000)
         .then(response => {
@@ -511,6 +620,76 @@ class CodexConversationManager {
         : null;
     }
     return await this.waitForTurn(threadId, turnId);
+  }
+
+  async waitForThreadIdle(threadId, messageId) {
+    if (config.codexThreadIdleTimeoutMs <= 0) return;
+    const startedAt = Date.now();
+    let lastLogAt = 0;
+    let finalAnswerSeenAt = null;
+    let finalAnswerTurnId = null;
+
+    while (true) {
+      let latestTurn = null;
+      try {
+        latestTurn = await this.readLatestTurn(threadId);
+      } catch (error) {
+        log('WARN', 'Could not read Codex thread state before starting Discord turn; proceeding', {
+          threadId,
+          messageId,
+          error: error.message,
+        });
+        return;
+      }
+
+      if (!latestTurn || latestTurn.status !== 'inProgress') return;
+
+      const hasFinalAnswer = turnHasFinalAnswer(latestTurn);
+      if (hasFinalAnswer) {
+        if (finalAnswerTurnId !== latestTurn.id) {
+          finalAnswerTurnId = latestTurn.id;
+          finalAnswerSeenAt = Date.now();
+        }
+        if (Date.now() - finalAnswerSeenAt >= config.codexThreadFinalAnswerIdleGraceMs) {
+          log('INFO', 'Treating Codex thread as idle after final-answer grace', {
+            threadId,
+            activeTurnId: latestTurn.id,
+            messageId,
+            graceMs: config.codexThreadFinalAnswerIdleGraceMs,
+          });
+          return;
+        }
+      } else {
+        finalAnswerSeenAt = null;
+        finalAnswerTurnId = null;
+      }
+
+      if (Date.now() - startedAt >= config.codexThreadIdleTimeoutMs) {
+        throw new Error(`Timed out waiting for Codex thread ${threadId} to become idle before Discord message ${messageId}`);
+      }
+
+      if (Date.now() - lastLogAt >= 5000) {
+        lastLogAt = Date.now();
+        log('INFO', 'Waiting for Codex thread to become idle before starting Discord turn', {
+          threadId,
+          activeTurnId: latestTurn.id,
+          activeStatus: latestTurn.status,
+          activeHasFinalAnswer: hasFinalAnswer,
+          messageId,
+        });
+      }
+
+      await sleep(config.codexThreadIdlePollMs);
+    }
+  }
+
+  async readLatestTurn(threadId) {
+    const response = await this.app.request('thread/read', {
+      threadId,
+      includeTurns: true,
+    }, 30000);
+    const turns = response.thread?.turns || [];
+    return turns.length ? turns[turns.length - 1] : null;
   }
 
   async injectMessage(threadId, prompt, metadata) {
@@ -543,6 +722,7 @@ class CodexConversationManager {
           cacheKey,
           this.app.request('thread/resume', {
             threadId: config.codexTargetThreadId,
+            excludeTurns: true,
             cwd: config.codexCwd,
             approvalPolicy: config.codexApprovalPolicy,
             sandbox: config.codexSandbox,
@@ -614,17 +794,76 @@ class CodexConversationManager {
       record.reject = reject;
       record.threadId = threadId;
       record.timeout = setTimeout(() => {
+        if (record.pollTimer) clearInterval(record.pollTimer);
         this.turnRecords.delete(turnId);
+        log('ERROR', 'Timed out waiting for Codex turn', {
+          threadId,
+          turnId,
+          timeoutMs: config.codexTurnTimeoutMs,
+        });
         this.app
           .request('turn/interrupt', { threadId, turnId }, 10000)
           .catch(error => log('WARN', 'Failed to interrupt timed-out Codex turn', { threadId, turnId, error: error.message }));
         reject(new Error('Codex turn timed out'));
       }, config.codexTurnTimeoutMs);
+      if (config.codexTurnPollMs > 0) {
+        record.pollTimer = setInterval(() => {
+          this.pollTurnRecord(turnId).catch(error => {
+            const current = this.turnRecords.get(turnId);
+            if (!current) return;
+            current.pollErrors += 1;
+            if (current.pollErrors <= 3) {
+              log('WARN', 'Failed to poll Codex turn state', {
+                threadId,
+                turnId,
+                error: error.message,
+              });
+            }
+          });
+        }, config.codexTurnPollMs);
+        record.pollTimer.unref();
+      }
 
       if (record.completed) {
         this.finishTurnRecord(turnId, record.completed);
       }
     });
+  }
+
+  async pollTurnRecord(turnId) {
+    const record = this.turnRecords.get(turnId);
+    if (!record || !record.threadId || record.polling) return;
+    record.polling = true;
+    try {
+      const response = await this.app.request('thread/read', {
+        threadId: record.threadId,
+        includeTurns: true,
+      }, 30000);
+      const turn = response.thread?.turns?.find(item => item.id === turnId);
+      if (!turn) return;
+      const finalMessage = [...(turn.items || [])]
+        .reverse()
+        .find(item => item.type === 'agentMessage' && item.phase === 'final_answer');
+      if (finalMessage) {
+        record.finalText = finalMessage.text || record.finalText || record.text;
+        this.finishTurnRecord(turnId, {
+          status: 'completed',
+          errorMessage: null,
+          source: 'thread_read_final_answer',
+        });
+        return;
+      }
+      if (turn.status && turn.status !== 'inProgress') {
+        this.finishTurnRecord(turnId, {
+          status: turn.status,
+          errorMessage: turn.error?.message || null,
+          source: 'thread_read_status',
+        });
+      }
+    } finally {
+      const current = this.turnRecords.get(turnId);
+      if (current) current.polling = false;
+    }
   }
 
   ensureTurnRecord(turnId, threadId = null) {
@@ -634,6 +873,9 @@ class CodexConversationManager {
         text: '',
         finalText: '',
         timeout: null,
+        pollTimer: null,
+        polling: false,
+        pollErrors: 0,
         resolve: null,
         reject: null,
         threadId,
@@ -660,8 +902,16 @@ class CodexConversationManager {
     }
 
     if (record.timeout) clearTimeout(record.timeout);
+    if (record.pollTimer) clearInterval(record.pollTimer);
     if (record.cleanup) clearTimeout(record.cleanup);
     this.turnRecords.delete(turnId);
+    log('INFO', 'Completed Codex turn from Discord', {
+      threadId: record.threadId,
+      turnId,
+      status: completed.status,
+      source: completed.source || 'turn/completed',
+      replyChars: (record.finalText || record.text || '').trim().length,
+    });
     if (completed.status === 'completed') {
       record.resolve((record.finalText || record.text || '').trim());
     } else {
@@ -672,15 +922,20 @@ class CodexConversationManager {
   handleNotification(notification) {
     const { method, params } = notification;
     if (method === 'item/agentMessage/delta') {
-      const record = this.ensureTurnRecord(params.turnId);
-      record.text += params.delta || '';
+      const record = this.turnRecords.get(params.turnId);
+      if (record) record.text += params.delta || '';
       return;
     }
 
     if (method === 'item/completed' && params.item?.type === 'agentMessage') {
-      const record = this.ensureTurnRecord(params.turnId);
+      const record = this.turnRecords.get(params.turnId);
       if (record && params.item.phase === 'final_answer') {
         record.finalText = params.item.text || record.text;
+        this.finishTurnRecord(params.turnId, {
+          status: 'completed',
+          errorMessage: null,
+          source: 'final_answer_item',
+        });
       }
       return;
     }
@@ -1115,6 +1370,10 @@ async function injectDiscordMessageIntoCodexTty(prompt, metadata) {
 function sleep(ms) {
   const delay = Number.isFinite(ms) ? Math.max(0, ms) : 0;
   return new Promise(resolve => setTimeout(resolve, delay));
+}
+
+function turnHasFinalAnswer(turn) {
+  return Boolean((turn.items || []).some(item => item.type === 'agentMessage' && item.phase === 'final_answer'));
 }
 
 function decodeSubmitSequence(value) {

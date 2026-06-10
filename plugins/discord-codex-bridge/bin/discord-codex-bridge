@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="${DISCORD_BRIDGE_PLUGIN_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+  SCRIPT_PATH="$(readlink "$SCRIPT_PATH")"
+  [[ "$SCRIPT_PATH" = /* ]] || SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+ROOT_DIR="${DISCORD_BRIDGE_PLUGIN_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 CODEX_BIN_DEFAULT="${CODEX_BIN:-codex}"
 NODE_BIN="${NODE_BIN:-node}"
 
 usage() {
   cat <<'EOF'
 Usage:
-  discord-codex-bridge install [--instance INSTANCE_VALUE]
+  discord-codex-bridge install [--instance INSTANCE_VALUE] [--dry-run]
+  discord-codex-bridge upgrade [--instance INSTANCE_VALUE] [--dry-run] [--skip-check] [--no-restart]
   discord-codex-bridge connect --instance INSTANCE_VALUE --thread THREAD_ID [--socket SOCKET] [--cwd DIR]
   discord-codex-bridge app-server --instance INSTANCE_VALUE [--socket SOCKET]
   discord-codex-bridge configure-current --instance INSTANCE_VALUE --thread THREAD_ID [--socket SOCKET] [--cwd DIR]
+  discord-codex-bridge doctor [--instance INSTANCE_VALUE] [--channel CHANNEL_ID]
   discord-codex-bridge start|stop|restart|status|logs [--instance INSTANCE_VALUE]
   discord-codex-bridge access [--instance INSTANCE_VALUE] -- <manage-access args>
   discord-codex-bridge send [--instance INSTANCE_VALUE] -- <send-message args>
@@ -167,11 +176,12 @@ configure_current() {
   local sock
   sock="$(socket_path)"
   set_env_key DISCORD_BRIDGE_INSTANCE "$instance"
-  set_env_key CODEX_TARGET_MODE wake
+  set_env_key CODEX_TARGET_MODE turn
   set_env_key CODEX_TARGET_THREAD_ID "$thread_id"
-  set_env_key CODEX_TARGET_THREAD_RESUME false
+  set_env_key CODEX_TARGET_THREAD_RESUME true
   set_env_key CODEX_APP_SERVER_SOCKET "$sock"
   set_env_key CODEX_DENY_SERVER_REQUESTS false
+  set_env_key CODEX_TURN_POLL_MS 1000
   set_env_key CODEX_WAKE_ACK_ON_DELIVERY false
   set_env_key CODEX_CWD "$cwd"
   printf 'configured %s\n' "$(env_file)"
@@ -204,10 +214,88 @@ start_app_server() {
 }
 
 install_bridge() {
+  local install_args=("$@")
   if [[ -n "$instance" ]]; then
-    DISCORD_BRIDGE_INSTANCE="$instance" bash "$ROOT_DIR/scripts/install-systemd-user.sh" --instance "$instance"
+    DISCORD_BRIDGE_INSTANCE="$instance" bash "$ROOT_DIR/scripts/install-systemd-user.sh" --instance "$instance" "${install_args[@]}"
   else
-    bash "$ROOT_DIR/scripts/install-systemd-user.sh"
+    bash "$ROOT_DIR/scripts/install-systemd-user.sh" "${install_args[@]}"
+  fi
+}
+
+service_unit_exists() {
+  systemctl --user cat "$(service_name)" >/dev/null 2>&1
+}
+
+ensure_service_installed() {
+  service_unit_exists && return 0
+  printf 'service %s is not installed; installing it now\n' "$(service_name)"
+  install_bridge
+}
+
+upgrade_bridge() {
+  local dry_run=false
+  local skip_check=false
+  local no_restart=false
+  local arg
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      --dry-run)
+        dry_run=true
+        shift
+        ;;
+      --skip-check)
+        skip_check=true
+        shift
+        ;;
+      --no-restart)
+        no_restart=true
+        shift
+        ;;
+      --help|-h)
+        cat <<'EOF'
+Usage: discord-codex-bridge upgrade [--instance INSTANCE_VALUE] [--dry-run] [--skip-check] [--no-restart]
+
+Runs local checks, reinstalls the PATH CLI symlink and user systemd service,
+then restarts the selected bridge instance unless --no-restart is passed.
+EOF
+        return 0
+        ;;
+      *)
+        die "unknown upgrade argument: $arg"
+        ;;
+    esac
+  done
+
+  local instance_args=()
+  if [[ -n "$instance" ]]; then
+    instance_args=(--instance "$instance")
+  fi
+
+  if [[ "$dry_run" == "true" ]]; then
+    printf '[dry-run] cd %s\n' "$ROOT_DIR"
+    if [[ "$skip_check" != "true" ]]; then
+      printf '[dry-run] npm run check\n'
+    fi
+    printf '[dry-run] %s/scripts/install-systemd-user.sh' "$ROOT_DIR"
+    if [[ ${#instance_args[@]} -gt 0 ]]; then
+      printf ' %s %s' "${instance_args[0]}" "${instance_args[1]}"
+    fi
+    printf '\n'
+    if [[ "$no_restart" == "true" ]]; then
+      printf '[dry-run] restart skipped by --no-restart\n'
+    else
+      printf '[dry-run] systemctl --user restart %s\n' "$(service_name)"
+    fi
+    return 0
+  fi
+
+  if [[ "$skip_check" != "true" ]]; then
+    (cd "$ROOT_DIR" && npm run check)
+  fi
+  install_bridge
+  if [[ "$no_restart" != "true" ]]; then
+    systemctl --user restart "$(service_name)"
   fi
 }
 
@@ -228,6 +316,70 @@ service_action() {
   esac
 }
 
+doctor() {
+  local channel=""
+  local arg
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      --channel)
+        channel="${2:-}"
+        shift 2
+        ;;
+      --help|-h)
+        cat <<'EOF'
+Usage: discord-codex-bridge doctor [--instance INSTANCE_VALUE] [--channel CHANNEL_ID]
+
+Checks local CLI paths, instance config, systemd service status, access state,
+and optionally Discord REST read access for one channel.
+EOF
+        return 0
+        ;;
+      *)
+        die "unknown doctor argument: $arg"
+        ;;
+    esac
+  done
+
+  validate_instance
+
+  printf '== paths ==\n'
+  printf 'plugin_dir=%s\n' "$ROOT_DIR"
+  printf 'node=%s\n' "$(command -v "$NODE_BIN" || true)"
+  printf 'codex=%s\n' "$(command -v "$CODEX_BIN_DEFAULT" || true)"
+  printf 'config_dir=%s\n' "$(config_dir)"
+  printf 'env_file=%s\n' "$(env_file)"
+  printf 'state_dir=%s\n' "$(state_dir)"
+  printf 'socket=%s\n' "$(socket_path)"
+  printf 'service=%s\n' "$(service_name)"
+
+  printf '\n== config ==\n'
+  local file
+  file="$(env_file)"
+  if [[ -f "$file" ]]; then
+    printf 'env_file_exists=yes\n'
+    if grep -q '^DISCORD_BOT_TOKEN=' "$file"; then
+      printf 'discord_token=set\n'
+    else
+      printf 'discord_token=missing\n'
+    fi
+    grep -E '^(DISCORD_BRIDGE_INSTANCE|DISCORD_CONFIG_DIR|DISCORD_PROXY_URL|DISCORD_INSECURE_TLS|CODEX_TARGET_MODE|CODEX_TARGET_THREAD_ID|CODEX_TARGET_THREAD_RESUME|CODEX_APP_SERVER_SOCKET|CODEX_DENY_SERVER_REQUESTS|CODEX_TURN_POLL_MS|CODEX_CWD)=' "$file" || true
+  else
+    printf 'env_file_exists=no\n'
+  fi
+
+  printf '\n== service ==\n'
+  systemctl --user is-active "$(service_name)" || true
+
+  printf '\n== access ==\n'
+  DISCORD_BRIDGE_INSTANCE="$instance" "$NODE_BIN" "$ROOT_DIR/scripts/manage-access.js" status || true
+
+  if [[ -n "$channel" ]]; then
+    printf '\n== discord-rest ==\n'
+    DISCORD_BRIDGE_INSTANCE="$instance" "$NODE_BIN" "$ROOT_DIR/scripts/fetch-messages.js" --channel "$channel" --limit 1
+  fi
+}
+
 case "$cmd" in
   help)
     usage
@@ -244,7 +396,10 @@ case "$cmd" in
     printf 'service=%s\n' "$(service_name)"
     ;;
   install)
-    install_bridge
+    install_bridge "${args[@]}"
+    ;;
+  upgrade)
+    upgrade_bridge "${args[@]}"
     ;;
   app-server)
     start_app_server
@@ -252,11 +407,15 @@ case "$cmd" in
   configure-current)
     configure_current
     ;;
+  doctor)
+    doctor "${args[@]}"
+    ;;
   connect)
     validate_instance
     [[ -n "$thread_id" ]] || die "--thread THREAD_ID or CODEX_TARGET_THREAD_ID is required"
     start_app_server
     configure_current
+    ensure_service_installed
     systemctl --user restart "$(service_name)"
     exec "$CODEX_BIN_DEFAULT" --remote "$(socket_url)" resume "$thread_id"
     ;;
