@@ -125,7 +125,39 @@ discord-codex-bridge restart --instance codex01
 discord-codex-bridge status --instance codex01
 ```
 
-Upgrade an existing checkout after pulling new code:
+There are two upgrade layers:
+
+1. Refresh the configured marketplace snapshot from Git.
+2. Refresh the local service files and restart the selected bridge instance.
+
+For a marketplace install, run:
+
+```bash
+codex plugin marketplace upgrade discord-codex-bridge
+codex plugin add discord-codex-bridge@discord-codex-bridge
+discord-codex-bridge upgrade --instance codex01 --dry-run
+discord-codex-bridge upgrade --instance codex01
+```
+
+`codex plugin marketplace upgrade` uses the marketplace entry stored in
+`$CODEX_HOME/config.toml` or `$HOME/.codex/config.toml`. For this repo that
+entry records:
+
+```toml
+[marketplaces.discord-codex-bridge]
+source_type = "git"
+source = "https://github.com/zhshgmail/discord-codex-bridge.git"
+ref = "main"
+last_revision = "<latest fetched git commit>"
+```
+
+The upgrade decision is therefore Git-based: it fetches the configured
+`source/ref`, updates the local marketplace snapshot when `last_revision`
+differs from the fetched commit, and leaves the configured plugin selector
+enabled. Re-run `codex plugin add ...` after the marketplace refresh to make
+the installed plugin cache match the refreshed marketplace snapshot.
+
+For a direct checkout, pull new code first:
 
 ```bash
 git pull --ff-only

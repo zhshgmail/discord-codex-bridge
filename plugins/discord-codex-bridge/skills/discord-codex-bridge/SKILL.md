@@ -178,6 +178,20 @@ discord-codex-bridge upgrade --instance codex01
 unit, then restarts the selected instance. Use `--no-restart` only when the
 user explicitly wants to stage the update without touching the live bot.
 
+For marketplace installs, the update is two-stage:
+
+```bash
+codex plugin marketplace upgrade discord-codex-bridge
+codex plugin add discord-codex-bridge@discord-codex-bridge
+discord-codex-bridge upgrade --instance codex01 --dry-run
+discord-codex-bridge upgrade --instance codex01
+```
+
+The marketplace layer decides by Git metadata in the user's config: source URL,
+ref, and last fetched revision. The local bridge layer decides by the refreshed
+plugin files and the selected instance; it rewrites the user service/env and
+restarts only that instance unless `--no-restart` is passed.
+
 ## Modes
 
 - `CODEX_TARGET_MODE=tty`: inject into an already-running interactive
