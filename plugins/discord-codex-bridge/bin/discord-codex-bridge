@@ -20,6 +20,7 @@ Usage:
   discord-codex-bridge connect --instance INSTANCE_VALUE --thread THREAD_ID [--socket SOCKET] [--cwd DIR]
   discord-codex-bridge app-server --instance INSTANCE_VALUE [--socket SOCKET]
   discord-codex-bridge configure-current --instance INSTANCE_VALUE --thread THREAD_ID [--socket SOCKET] [--cwd DIR]
+  discord-codex-bridge configure-tty --instance INSTANCE_VALUE [--tty /dev/pts/N | --pid PID] [--cwd DIR]
   discord-codex-bridge doctor [--instance INSTANCE_VALUE] [--channel CHANNEL_ID]
   discord-codex-bridge start|stop|restart|status|logs [--instance INSTANCE_VALUE]
   discord-codex-bridge access [--instance INSTANCE_VALUE] -- <manage-access args>
@@ -38,6 +39,8 @@ Environment-first path overrides:
   DISCORD_BRIDGE_SOCKET_DIR   Base directory for app-server sockets
   CODEX_APP_SERVER_SOCKET     Explicit app-server socket path
   CODEX_CWD                   Codex working directory
+  CODEX_TTY                   Explicit target TTY for exact-console injection
+  CODEX_TTY_PID               Resolve target TTY from a Codex process PID
   CODEX_BIN                   codex executable
 EOF
 }
@@ -56,6 +59,8 @@ instance="${DISCORD_BRIDGE_INSTANCE:-${DISCORD_INSTANCE:-}}"
 socket="${CODEX_APP_SERVER_SOCKET:-}"
 thread_id="${CODEX_TARGET_THREAD_ID:-}"
 cwd="${CODEX_CWD:-$PWD}"
+tty_path="${CODEX_TTY:-}"
+tty_pid="${CODEX_TTY_PID:-}"
 
 args=()
 while [[ $# -gt 0 ]]; do
@@ -74,6 +79,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cwd)
       cwd="${2:-}"
+      shift 2
+      ;;
+    --tty)
+      tty_path="${2:-}"
+      shift 2
+      ;;
+    --pid|--tty-pid)
+      tty_pid="${2:-}"
       shift 2
       ;;
     --help|-h)
@@ -185,6 +198,40 @@ configure_current() {
   set_env_key CODEX_WAKE_ACK_ON_DELIVERY false
   set_env_key CODEX_CWD "$cwd"
   printf 'configured %s\n' "$(env_file)"
+}
+
+configure_tty() {
+  validate_instance
+  if [[ -n "$tty_path" && -n "$tty_pid" ]]; then
+    die "use only one of --tty or --pid"
+  fi
+  set_env_key DISCORD_BRIDGE_INSTANCE "$instance"
+  set_env_key CODEX_TARGET_MODE tty
+  set_env_key CODEX_TARGET_THREAD_ID ""
+  set_env_key CODEX_TARGET_THREAD_RESUME ""
+  set_env_key CODEX_APP_SERVER_SOCKET ""
+  set_env_key CODEX_DENY_SERVER_REQUESTS ""
+  set_env_key CODEX_TURN_POLL_MS ""
+  set_env_key CODEX_WAKE_ACK_ON_DELIVERY ""
+  if [[ -n "$tty_path" ]]; then
+    set_env_key CODEX_TTY "$tty_path"
+    set_env_key CODEX_TTY_PID ""
+  elif [[ -n "$tty_pid" ]]; then
+    [[ "$tty_pid" =~ ^[0-9]+$ ]] || die "invalid --pid value: $tty_pid"
+    set_env_key CODEX_TTY_PID "$tty_pid"
+    set_env_key CODEX_TTY ""
+  else
+    set_env_key CODEX_TTY ""
+    set_env_key CODEX_TTY_PID ""
+  fi
+  set_env_key CODEX_TTY_PROMPT_FORMAT "${CODEX_TTY_PROMPT_FORMAT:-minimal}"
+  set_env_key CODEX_TTY_BRACKETED_PASTE "${CODEX_TTY_BRACKETED_PASTE:-false}"
+  set_env_key CODEX_TTY_SUBMIT_SEQUENCE "${CODEX_TTY_SUBMIT_SEQUENCE:-cr}"
+  set_env_key CODEX_TTY_SPLIT_SUBMIT "${CODEX_TTY_SPLIT_SUBMIT:-true}"
+  set_env_key CODEX_TTY_SUBMIT_DELAY_MS "${CODEX_TTY_SUBMIT_DELAY_MS:-500}"
+  set_env_key CODEX_TTY_ACK_ON_DELIVERY "${CODEX_TTY_ACK_ON_DELIVERY:-false}"
+  set_env_key CODEX_CWD "$cwd"
+  printf 'configured exact-console TTY mode in %s\n' "$(env_file)"
 }
 
 start_app_server() {
@@ -363,7 +410,7 @@ EOF
     else
       printf 'discord_token=missing\n'
     fi
-    grep -E '^(DISCORD_BRIDGE_INSTANCE|DISCORD_CONFIG_DIR|DISCORD_PROXY_URL|DISCORD_INSECURE_TLS|CODEX_TARGET_MODE|CODEX_TARGET_THREAD_ID|CODEX_TARGET_THREAD_RESUME|CODEX_APP_SERVER_SOCKET|CODEX_DENY_SERVER_REQUESTS|CODEX_TURN_POLL_MS|CODEX_CWD)=' "$file" || true
+    grep -E '^(DISCORD_BRIDGE_INSTANCE|DISCORD_CONFIG_DIR|DISCORD_PROXY_URL|DISCORD_INSECURE_TLS|CODEX_TARGET_MODE|CODEX_TARGET_THREAD_ID|CODEX_TARGET_THREAD_RESUME|CODEX_APP_SERVER_SOCKET|CODEX_DENY_SERVER_REQUESTS|CODEX_TURN_POLL_MS|CODEX_TTY|CODEX_TTY_PID|CODEX_TTY_PROMPT_FORMAT|CODEX_CWD)=' "$file" || true
   else
     printf 'env_file_exists=no\n'
   fi
@@ -406,6 +453,9 @@ case "$cmd" in
     ;;
   configure-current)
     configure_current
+    ;;
+  configure-tty)
+    configure_tty
     ;;
   doctor)
     doctor "${args[@]}"

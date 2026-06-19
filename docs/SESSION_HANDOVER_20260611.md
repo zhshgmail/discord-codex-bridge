@@ -2,6 +2,14 @@
 
 ## Start Here
 
+2026-06-15 correction: this handover used "current-session" too broadly for
+app-server `turn` mode. `turn` preserves/routes to an app-server thread, but it
+does not make Discord text appear as typed input in the exact active console.
+For exact-console behavior, use `CODEX_TARGET_MODE=tty` with `CODEX_TTY` or
+`CODEX_TTY_PID` bound to the interactive Codex terminal. Treat the older
+"preferred current-session path is app-server socket mode" wording below as
+thread-preserving sidecar guidance, not exact-console guidance.
+
 Current task state: the Discord bridge plugin code was shipped to `origin/main` before this handover. This file is the final handover artifact; if a future agent sees it untracked or unpushed, finish the handover commit/push before doing new work. The live `codex01` service is online on the original machine, and there is no in-flight code change.
 
 Same-machine live-ops commands, only on the original host/session:

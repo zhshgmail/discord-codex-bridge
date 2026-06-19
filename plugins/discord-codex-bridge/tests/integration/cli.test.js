@@ -76,6 +76,51 @@ test('configure-current writes a resumable app-server turn configuration', () =>
   assert.match(text, /^CODEX_CWD='\/work\/project'$/m);
 });
 
+test('configure-tty writes an exact-console TTY configuration', () => {
+  const { tmp, env } = makeHarness();
+  const result = runCli([
+    'configure-tty',
+    '--instance', 'codex01',
+    '--tty', '/dev/pts/42',
+    '--cwd', '/work/project',
+  ], env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const envFile = path.join(tmp, 'discord-config', 'codex01', '.env');
+  const text = fs.readFileSync(envFile, 'utf8');
+  assert.match(text, /^DISCORD_BRIDGE_INSTANCE='codex01'$/m);
+  assert.match(text, /^CODEX_TARGET_MODE='tty'$/m);
+  assert.match(text, /^CODEX_TTY='\/dev\/pts\/42'$/m);
+  assert.match(text, /^CODEX_TTY_PROMPT_FORMAT='minimal'$/m);
+  assert.match(text, /^CODEX_TTY_ACK_ON_DELIVERY='false'$/m);
+  assert.match(text, /^CODEX_CWD='\/work\/project'$/m);
+});
+
+test('configure-tty clears stale app-server routing keys', () => {
+  const { tmp, env } = makeHarness();
+  const envFile = path.join(tmp, 'discord-config', 'codex01', '.env');
+  fs.mkdirSync(path.dirname(envFile), { recursive: true });
+  fs.writeFileSync(envFile, [
+    "CODEX_TARGET_MODE='turn'",
+    "CODEX_TARGET_THREAD_ID='thread-123'",
+    "CODEX_APP_SERVER_SOCKET='/tmp/old.sock'",
+    '',
+  ].join('\n'));
+
+  const result = runCli([
+    'configure-tty',
+    '--instance', 'codex01',
+    '--tty', '/dev/pts/42',
+  ], env);
+
+  assert.equal(result.status, 0, result.stderr);
+  const text = fs.readFileSync(envFile, 'utf8');
+  assert.match(text, /^CODEX_TARGET_MODE='tty'$/m);
+  assert.match(text, /^CODEX_TARGET_THREAD_ID=''$/m);
+  assert.match(text, /^CODEX_APP_SERVER_SOCKET=''$/m);
+  assert.match(text, /^CODEX_TARGET_THREAD_RESUME=''$/m);
+});
+
 test('install --dry-run previews files without writing service files', () => {
   const { tmp, env } = makeHarness();
   const result = runCli(['install', '--instance', 'codex01', '--dry-run'], env);

@@ -19,7 +19,22 @@ discord-codex-bridge connect --instance codex01 --thread THREAD_ID --cwd "$PWD"
 discord-codex-bridge upgrade --instance codex01 --dry-run
 ```
 
-For current-session operation, the recommended path is app-server socket mode:
+For exact-console operation, use TTY mode. This is the only mode that makes
+Discord text appear in the already-open interactive Codex terminal:
+
+```bash
+discord-codex-bridge configure-tty --instance codex01 --tty /dev/pts/N --cwd "$PWD"
+discord-codex-bridge restart --instance codex01
+```
+
+If the target terminal is known by process id:
+
+```bash
+discord-codex-bridge configure-tty --instance codex01 --pid PID --cwd "$PWD"
+discord-codex-bridge restart --instance codex01
+```
+
+For app-server sidecar operation, use socket mode:
 
 1. Run `discord-codex-bridge connect --instance NAME --thread THREAD_ID --cwd "$PWD"`.
 2. Ensure the instance `.env` has `CODEX_TARGET_MODE=turn`,
@@ -29,6 +44,10 @@ For current-session operation, the recommended path is app-server socket mode:
    accepts unattended remote operation.
 4. Verify with `discord-codex-bridge doctor --instance NAME --channel CHANNEL_ID`
    and one real Discord DM or guild mention.
+
+Do not describe app-server `turn` mode as exact-console injection. It preserves
+the app-server thread, but Discord messages are processed as bridge-started
+turns and may not appear in the active terminal input area.
 
 ## Release Gate
 
@@ -194,14 +213,13 @@ restarts only that instance unless `--no-restart` is passed.
 
 ## Modes
 
-- `CODEX_TARGET_MODE=tty`: inject into an already-running interactive
-  `codex resume` TTY. This can reach an already-open TUI, but it cannot protect
-  local half-typed input from being submitted with Discord text.
+- `CODEX_TARGET_MODE=tty`: inject into an already-running interactive Codex
+  TTY. This is the exact-console path, but it cannot protect local half-typed
+  input from being submitted with Discord text.
 - `CODEX_TARGET_MODE=turn`: start or resume a Codex app-server thread and post
   the final answer back to Discord. When `CODEX_APP_SERVER_SOCKET` is set, the
   bridge connects directly to the same Unix WebSocket `/rpc` endpoint used by
-  `codex --remote`; this is the preferred current-TUI bridge path because it
-  avoids TTY input-buffer corruption and does not patch Codex.
+  `codex --remote`; this is a sidecar thread path, not exact-console input.
 - `CODEX_TARGET_MODE=wake`: start an app-server turn in the target thread and,
   by default, avoid noisy delivery acknowledgements. The bridge unsubscribes
   from the target thread after starting the turn so the TUI remains primary.

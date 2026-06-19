@@ -8,6 +8,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const readline = require('node:readline');
 const { loadEnvFile: loadBridgeEnvFile, resolveDiscordPaths } = require('./config-paths');
+const { parseCodexTtyCandidates } = require('./tty-detect');
 const {
   loadState,
   saveState,
@@ -1276,21 +1277,11 @@ function resolveCodexTty() {
     throw new Error(`Unable to list processes for Codex TTY discovery: ${result.stderr.trim()}`);
   }
 
-  const candidates = [];
-  for (const line of result.stdout.split(/\r?\n/)) {
-    const match = /^\s*(\d+)\s+(\S+)\s+(.*)$/.exec(line);
-    if (!match) continue;
-    const [, rawPid, tty, args] = match;
-    if (!tty.startsWith('pts/')) continue;
-    if (!/\bcodex\b/.test(args) || !/\bresume\b/.test(args)) continue;
-    candidates.push({ pid: Number(rawPid), tty: `/dev/${tty}`, args });
-  }
+  const candidates = parseCodexTtyCandidates(result.stdout);
 
   if (!candidates.length) {
-    throw new Error('Unable to auto-detect a running interactive `codex resume` TTY. Set CODEX_TTY=/dev/pts/N.');
+    throw new Error('Unable to auto-detect a running interactive Codex TTY. Set CODEX_TTY=/dev/pts/N or CODEX_TTY_PID=PID.');
   }
-
-  candidates.sort((a, b) => b.pid - a.pid);
   return candidates[0].tty;
 }
 

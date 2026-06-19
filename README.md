@@ -4,8 +4,8 @@ Proxy-aware Discord bridge and Codex plugin skills for remote Codex chat/control
 
 The bridge can route Discord DMs, guild mentions, or opted-in channels into:
 
-- an already-running interactive `codex resume` TTY (`CODEX_TARGET_MODE=tty`);
-- a Codex app-server thread that replies back to Discord (`CODEX_TARGET_MODE=turn`);
+- an already-running interactive Codex terminal (`CODEX_TARGET_MODE=tty`), which is the exact-console path;
+- a Codex app-server thread that replies back to Discord (`CODEX_TARGET_MODE=turn`), which is a sidecar turn and does not inject into the active terminal input;
 - a target app-server thread using `wake` or `inject` modes.
 
 The repository also ships Codex skills for setup and access management:
@@ -179,7 +179,7 @@ the instance `.env` before restarting the bridge:
 CODEX_TURN_TIMEOUT_MS=1800000
 ```
 
-One-command current-session setup:
+One-command app-server sidecar setup:
 
 ```bash
 discord-codex-bridge connect --instance codex01 --thread THREAD_ID --cwd "$PWD"
@@ -188,7 +188,9 @@ discord-codex-bridge connect --instance codex01 --thread THREAD_ID --cwd "$PWD"
 `connect` starts the shared app-server socket if needed, writes the selected
 thread/socket/current working directory into the instance `.env`, installs the
 user service if it is missing, restarts the bridge, and then resumes the
-interactive session through the same socket.
+interactive session through the same socket. This preserves the thread, but it
+does not make Discord messages appear as typed input in an already-active
+terminal. Use TTY mode for exact-console behavior.
 
 ## Proxy and Corporate TLS
 
@@ -334,6 +336,20 @@ set:
 CODEX_TTY=/dev/pts/N
 ```
 
+Or configure the instance with the CLI:
+
+```bash
+discord-codex-bridge configure-tty --instance codex01 --tty /dev/pts/N --cwd "$PWD"
+discord-codex-bridge restart --instance codex01
+```
+
+If you know the Codex process PID instead of the terminal path:
+
+```bash
+discord-codex-bridge configure-tty --instance codex01 --pid PID --cwd "$PWD"
+discord-codex-bridge restart --instance codex01
+```
+
 On hosts that block unprivileged `TIOCSTI`, keep:
 
 ```env
@@ -386,8 +402,8 @@ app-server turn before posting an error back to Discord. The example config
 uses 30 minutes because install, test, commit, and push tasks often exceed the
 shorter interactive default.
 
-For a current interactive Codex session without TTY injection, run the TUI and
-the bridge against the same Unix app-server socket:
+For a sidecar Codex session without TTY injection, run the TUI and the bridge
+against the same Unix app-server socket:
 
 ```bash
 DISCORD_BRIDGE_INSTANCE=codex01
@@ -420,6 +436,11 @@ Or use the single-command path:
 ```bash
 discord-codex-bridge connect --instance codex01 --thread THREAD_ID --cwd "$PWD"
 ```
+
+This is not equivalent to TTY injection. It routes Discord into the same
+app-server thread, but while the local console owns an in-progress turn, a
+Discord turn waits or starts through the bridge connection rather than showing
+as typed input in that exact console.
 
 Use one socket per Discord bridge instance. Sharing a socket across instances
 can mix event subscriptions, approvals, and target thread routing.

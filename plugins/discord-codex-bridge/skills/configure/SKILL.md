@@ -81,8 +81,22 @@ For named instances, use:
 discord-codex-bridge restart --instance "$DISCORD_BRIDGE_INSTANCE"
 ```
 
-For current-session app-server mode, prefer the wrapper instead of hand-editing
-socket paths:
+For exact-console mode, bind the bridge to the interactive Codex terminal:
+
+```bash
+discord-codex-bridge configure-tty --instance "$DISCORD_BRIDGE_INSTANCE" --tty /dev/pts/N --cwd "$PWD"
+discord-codex-bridge restart --instance "$DISCORD_BRIDGE_INSTANCE"
+```
+
+Or bind by process id:
+
+```bash
+discord-codex-bridge configure-tty --instance "$DISCORD_BRIDGE_INSTANCE" --pid PID --cwd "$PWD"
+discord-codex-bridge restart --instance "$DISCORD_BRIDGE_INSTANCE"
+```
+
+For app-server sidecar mode, prefer the wrapper instead of hand-editing socket
+paths:
 
 ```bash
 discord-codex-bridge connect --instance "$DISCORD_BRIDGE_INSTANCE" --thread THREAD_ID --cwd "$PWD"
@@ -90,7 +104,8 @@ discord-codex-bridge connect --instance "$DISCORD_BRIDGE_INSTANCE" --thread THRE
 
 This writes the instance `.env`, starts the app-server socket if needed,
 installs the user service if it is missing, restarts the bridge, and resumes
-the selected thread through the same socket.
+the selected thread through the same socket. It does not make Discord text
+appear as typed input in an already-active terminal; use TTY mode for that.
 
 ## Bot setup reminders
 
